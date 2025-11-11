@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Pro-Bending Manager — Text Sim (Detailed Commentary + Cadence + Graph)</title>
+<title>Pro-Bending Manager — 3-Min Rounds + Summaries + Match Flow</title>
 <style>
   :root { font-family: system-ui, Segoe UI, Roboto, Arial, sans-serif; }
   body { margin: 24px; line-height: 1.45; }
@@ -40,25 +40,23 @@
   .modal .content h4{ margin:14px 0 6px; font-size:1rem }
   .modal .content p{ margin:6px 0 }
   .modal footer{ padding:12px 16px; border-top:1px solid #eee; display:flex; justify-content:flex-end; gap:8px }
-  .icon-btn{
-    background:transparent; color:#111; border:1px solid #ccc; border-radius:8px; padding:6px 10px; cursor:pointer;
-  }
+  .icon-btn{ background:transparent; color:#111; border:1px solid #ccc; border-radius:8px; padding:6px 10px; cursor:pointer; }
 </style>
 </head>
 <body>
-  <h1>Pro-Bending Manager — Text-Only Round Sim</h1>
+  <h1>Pro-Bending Manager — Text-Only Match Sim</h1>
   <p class="muted">
-    Detailed commentary • dynamic stamina/composure • variance • slow announcer • color timeline.
+    3-minute rounds • detailed summaries • MVP • between-round recovery • slow announcer • color timeline.
     <button id="openGuide" class="icon-btn" aria-haspopup="dialog" aria-controls="statsGuide">📘 Stats Guide</button>
   </p>
 
   <div class="row">
-    <div class="card" style="max-width: 560px;">
+    <div class="card" style="max-width: 640px;">
       <h2 style="font-size:1.05rem;margin:0 0 8px;">Controls</h2>
       <div class="flex">
         <label>Seed <input id="seed" type="text" value="stormfront42" class="mono" style="width:140px;"></label>
-        <label>Ticks <input id="ticks" type="number" min="10" max="200" step="1" value="26" /></label>
         <label>Δt (sec) <input id="dt" type="number" min="1" max="10" step="1" value="5" /></label>
+        <span class="muted">Ticks auto = <span id="ticksAuto">36</span> (fixed round 180s)</span>
         <label>Scale <input id="scale" type="number" min="20" max="200" step="5" value="60" /></label>
       </div>
       <div class="flex" style="margin-top:8px;">
@@ -72,10 +70,10 @@
         </label>
       </div>
       <div class="flex" style="margin-top:10px;">
-        <button id="runBtn">Run Round</button>
-        <button id="swapBtn">Swap Sides</button>
-        <button id="resetBtn">Reset Rosters</button>
-        <span class="muted">Round length = <span id="roundLen">130</span>s</span>
+        <button id="runBtn">Run Round <span class="muted">(Round <span id="roundNo">1</span>)</span></button>
+        <button id="nextBtn" disabled>Next Round</button>
+        <button id="resetMatchBtn" class="icon-btn">Reset Match</button>
+        <span class="muted">Round length fixed: <b>180s</b></span>
       </div>
     </div>
 
@@ -105,8 +103,13 @@
     <h2 style="font-size:1.05rem;margin:0 0 8px;">Timeline Graph (equal cadence)</h2>
     <canvas id="graph" width="900" height="220" aria-label="Zone progression chart"></canvas>
     <p class="muted" style="margin-top:8px;">
-      Blue line = momentum toward Blue, Red line = toward Red. Zero line is mid-field. Each step = one tick (equal spacing).
+      Blue = momentum toward Blue, Red = toward Red. Zero line is mid-field. Each step = one tick.
     </p>
+  </div>
+
+  <div class="card" style="margin-top:16px;">
+    <h2 style="font-size:1.05rem;margin:0 0 8px;">Round Summary</h2>
+    <pre id="summary">—</pre>
   </div>
 
   <!-- ===== Modal: Stats Guide ===== -->
@@ -123,17 +126,16 @@
         <p><b>CMP</b> Composure — steadiness under pressure. <b>POS</b> Position Sense — spacing/formation discipline.</p>
         <p><b>STM</b> Stamina — short-term energy pool. <b>END</b> Endurance — performance retention as STM dips.</p>
         <h4>Round Controls</h4>
-        <p><b>Ticks</b> × <b>Δt</b> = round length. <b>Scale</b> calms the meter (bigger = slower zone movement). <b>Variance</b> = ±randomness.</p>
-        <p><b>Seed</b> = deterministic randomness. Toggle <b>Slow Announcer</b> for line-by-line commentary, adjust cadence.</p>
+        <p><b>Δt</b> sets tick spacing; <b>Ticks</b> auto = 180 / Δt (3:00 cap). <b>Scale</b> calms the meter (bigger = slower zone movement). <b>Variance</b> = ±randomness. <b>Seed</b> = deterministic randomness.</p>
         <h4>Under the Hood (simplified)</h4>
-        <p>Each tick: Offense = avg(STR, PRC, INI, RHY) × Stamina × Composure; Defense = avg(GST, AWR, CMP, POS) × Stamina × Composure. Off−Def → momentum → zone drift. Pushing drains STM; swings nudge CMP.</p>
+        <p>Each tick: Offense = avg(STR, PRC, INI, RHY) × Stamina × Composure; Defense = avg(GST, AWR, CMP, POS) × Stamina × Composure. Off−Def → momentum → zone drift. Pushing drains STM; swings nudge CMP. Between rounds: small recovery.</p>
       </div>
       <footer><button id="closeGuide2" class="icon-btn">Close</button></footer>
     </div>
   </div>
 
 <script>
-/* ========= Seeded RNG (mulberry32) ========= */
+/* ========= Seeded RNG ========= */
 function mulberry32(seedStr) {
   let h = 1779033703 ^ seedStr.length;
   for (let i = 0; i < seedStr.length; i++) {
@@ -160,8 +162,21 @@ const DEFAULT_RED = [
   { name:"Bolin", INI:68, STR:82, PRC:74, GST:90, AWR:85, RHY:80, CMP:88, POS:88, STM:88, END:90 },
 ];
 
+let blueBase = JSON.parse(JSON.stringify(DEFAULT_BLUE));
+let redBase  = JSON.parse(JSON.stringify(DEFAULT_RED));
 let blue = JSON.parse(JSON.stringify(DEFAULT_BLUE));
 let red  = JSON.parse(JSON.stringify(DEFAULT_RED));
+
+/* ========= Match State (persists across rounds) ========= */
+const matchState = {
+  round: 1,
+  rngSeed: "stormfront42",
+  // team-level effective factors (stamina/composure multipliers)
+  stamB: null, stamR: null, compB: null, compR: null,
+  lastTimeline: [],
+  lastWinner: null,
+  locked: false
+};
 
 /* ========= Helpers ========= */
 const $ = sel => document.querySelector(sel);
@@ -169,7 +184,6 @@ const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
 const fmt = n => (n>=0? "+" : "") + n.toFixed(2);
 function avg(arr){ return arr.reduce((a,b)=>a+b,0)/arr.length; }
 
-/* ========= Roster rendering ========= */
 function rosterText(team){
   const lines = team.map(p => {
     const attrs = ["INI","STR","PRC","GST","AWR","RHY","CMP","POS","STM","END"].map(k => `${k}:${String(p[k]).padStart(2,' ')}`).join(" ");
@@ -181,6 +195,28 @@ function rosterText(team){
 function renderRosters(){
   $("#blueRoster").textContent = rosterText(blue);
   $("#redRoster").textContent  = rosterText(red);
+}
+
+/* ========= Factors ========= */
+function teamBaseStaminaFromRoster(team){
+  const s = avg(team.map(p => p.STM));
+  return 0.85 + (s/100)*0.30; // 0.85–1.15
+}
+function teamBaseComposureFromRoster(team){
+  const c = avg(team.map(p => p.CMP));
+  return 0.85 + (c/100)*0.30; // 0.85–1.15
+}
+
+/* ========= Off/Def ========= */
+function teamOffense(players, stam, comp){
+  const vals = [];
+  players.forEach(p => vals.push(p.STR, p.PRC, p.INI, p.RHY));
+  return avg(vals) * stam * (0.6 + 0.4*comp);
+}
+function teamDefense(players, stam, comp){
+  const vals = [];
+  players.forEach(p => vals.push(p.GST, p.AWR, p.CMP, p.POS));
+  return avg(vals) * (0.5 + 0.5*stam) * (0.7 + 0.3*comp);
 }
 
 /* ========= Commentary Pools ========= */
@@ -221,40 +257,21 @@ const pools = {
     "Silence ripples through the crowd—eyes locked on the meter."
   ]
 };
-
 function pick(arr, rng){ return arr[Math.floor(rng()*arr.length)] }
 function stamp(t, s){ return `${String(t).padStart(3," ")}s: ${s}` }
 
-/* ========= Factors ========= */
-function teamBaseStamina(team){
-  const s = avg(team.map(p => p.STM));
-  return 0.85 + (s/100)*0.30; // 0.85–1.15
-}
-function teamBaseComposure(team){
-  const c = avg(team.map(p => p.CMP));
-  return 0.85 + (c/100)*0.30; // 0.85–1.15
-}
-
-/* ========= Off/Def with dynamic factors ========= */
-function teamOffense(players, stam, comp){
-  const vals = [];
-  players.forEach(p => vals.push(p.STR, p.PRC, p.INI, p.RHY));
-  return avg(vals) * stam * (0.6 + 0.4*comp);
-}
-function teamDefense(players, stam, comp){
-  const vals = [];
-  players.forEach(p => vals.push(p.GST, p.AWR, p.CMP, p.POS));
-  return avg(vals) * (0.5 + 0.5*stam) * (0.7 + 0.3*comp);
-}
-
-/* ========= Simulation ========= */
-function simulateRound({seed, ticks, dt, scale, variancePct}){
+/* ========= Simulation (180s strict) ========= */
+function simulateRound({seed, dt, scale, variancePct}){
   const rng = mulberry32(seed || "default-seed");
 
-  let stamB = teamBaseStamina(blue);
-  let stamR = teamBaseStamina(red);
-  let compB = teamBaseComposure(blue);
-  let compR = teamBaseComposure(red);
+  const ticks = Math.max(1, Math.floor(180 / dt)); // fixed 3:00
+  $("#ticksAuto").textContent = String(ticks);
+
+  // team multipliers carry over between rounds or start from roster
+  let stamB = matchState.stamB ?? teamBaseStaminaFromRoster(blue);
+  let stamR = matchState.stamR ?? teamBaseStaminaFromRoster(red);
+  let compB = matchState.compB ?? teamBaseComposureFromRoster(blue);
+  let compR = matchState.compR ?? teamBaseComposureFromRoster(red);
 
   let zone = 0; // + blue, - red
   const timeline = [];
@@ -267,12 +284,11 @@ function simulateRound({seed, ticks, dt, scale, variancePct}){
     const exertB = (t < Math.min(6, ticks)) ? exertEarly : exertLate;
     const exertR = (t < Math.min(6, ticks)) ? exertEarly : exertLate;
 
-    // jitter per side per tick (variance%)
-    const jitter = (pct) => 1 + ((rng()*2-1) * (pct/100));
-    const offB = teamOffense(blue, stamB, compB) * jitter(variancePct);
-    const defB = teamDefense(blue, stamB, compB) * jitter(variancePct);
-    const offR = teamOffense(red,  stamR, compR) * jitter(variancePct);
-    const defR = teamDefense(red,  stamR, compR) * jitter(variancePct);
+    const jitter = (pct, r) => 1 + ((r()*2-1) * (pct/100));
+    const offB = teamOffense(blue, stamB, compB) * jitter(variancePct, rng);
+    const defB = teamDefense(blue, stamB, compB) * jitter(variancePct, rng);
+    const offR = teamOffense(red,  stamR, compR) * jitter(variancePct, rng);
+    const defR = teamDefense(red,  stamR, compR) * jitter(variancePct, rng);
 
     const momBlue = offB - defR;
     const momRed  = offR - defB;
@@ -298,36 +314,16 @@ function simulateRound({seed, ticks, dt, scale, variancePct}){
     compB = clamp(compB + (pressure>0? +0.006 : -0.005) + (zone>0? +0.001 : -0.001), 0.70, 1.30);
     compR = clamp(compR + (pressure<0? +0.006 : -0.005) + (zone<0? +0.001 : -0.001), 0.70, 1.30);
 
-    // — detailed commentary —
-    if (t === 0){
-      lines.push(pick(pools.start, rng));
-    }
-
-    // describe each tick with a short telemetry line (gives context)
+    // commentary: detailed telemetry + flavor
+    if (t === 0) lines.push(pick(pools.start, rng));
     const mag = Math.abs(delta);
-    const tag = mag > 0.75 ? "HUGE SWING"
-              : mag > 0.45 ? "BIG SWING"
-              : mag > 0.20 ? "shift"
-              : "tap";
+    const tag = mag > 0.75 ? "HUGE SWING" : mag > 0.45 ? "BIG SWING" : mag > 0.20 ? "shift" : "tap";
     const who = delta>0 ? "Stormfront" : (delta<0 ? "Fire Ferrets" : "Neutral");
-    const lineTelemetry =
-      `${String(time).padStart(3," ")}s: ${who} ${tag} ` +
-      `Δ${fmt(delta)} | zone:${fmt(zone)} | STM(B/R) ${stamB.toFixed(2)}/${stamR.toFixed(2)} | CMP(B/R) ${compB.toFixed(2)}/${compR.toFixed(2)}`;
-    lines.push(lineTelemetry);
-
-    // flavor add-ons on top of telemetry
-    if (mag > 0.6){
-      lines.push( stamp(time, delta>0 ? pick(pools.swingBlue, rng) : pick(pools.swingRed, rng)) );
-    }
-    if (Math.abs(zone) > 1.0 && (t % 3 === 0)){
-      lines.push( stamp(time, zone>0 ? pick(pools.flipBlue, rng) : pick(pools.flipRed, rng)) );
-    }
-    if (t === Math.floor(ticks/2)){
-      lines.push( stamp(time, pick(pools.fatigue, rng)) );
-    }
-    if (ticks - t === 3){
-      lines.push( stamp(time, pick(pools.clutch, rng)) );
-    }
+    lines.push(`${String(time).padStart(3," ")}s: ${who} ${tag} Δ${fmt(delta)} | zone:${fmt(zone)} | STM(B/R) ${stamB.toFixed(2)}/${stamR.toFixed(2)} | CMP(B/R) ${compB.toFixed(2)}/${compR.toFixed(2)}`);
+    if (mag > 0.6) lines.push( stamp(time, delta>0 ? pick(pools.swingBlue, rng) : pick(pools.swingRed, rng)) );
+    if (Math.abs(zone) > 1.0 && (t % 3 === 0)) lines.push( stamp(time, zone>0 ? pick(pools.flipBlue, rng) : pick(pools.flipRed, rng)) );
+    if (t === Math.floor(ticks/2)) lines.push( stamp(time, pick(pools.fatigue, rng)) );
+    if (ticks - t === 3) lines.push( stamp(time, pick(pools.clutch, rng)) );
   }
 
   const winner = zone > 0.10 ? "Stormfront Arcs (Blue)"
@@ -339,176 +335,87 @@ function simulateRound({seed, ticks, dt, scale, variancePct}){
     zone: Number(zone.toFixed(2)),
     timeline,
     lines,
-    stamina: { blue: Number(stamB.toFixed(2)), red: Number(stamR.toFixed(2)) },
-    composure: { blue: Number(compB.toFixed(2)), red: Number(compR.toFixed(2)) }
+    endFactors: { stamB, stamR, compB, compR }
   };
 }
 
-/* ========= UI & Graph ========= */
-renderRosters();
-const seedEl = $("#seed"), ticksEl = $("#ticks"), dtEl = $("#dt"), scaleEl = $("#scale");
-const varianceEl = $("#variance"), varianceValEl = $("#varianceVal");
-const slowEl = $("#slow"), cadenceEl = $("#cadence");
-const roundLenEl = $("#roundLen");
-const graph = $("#graph");
-const ctx = graph.getContext("2d");
-
-function updateRoundLen(){
-  const ticks = parseInt(ticksEl.value||"26",10);
-  const dt = parseInt(dtEl.value||"5",10);
-  roundLenEl.textContent = String(ticks*dt);
-}
-ticksEl.addEventListener("input", updateRoundLen);
-dtEl.addEventListener("input", updateRoundLen);
-updateRoundLen();
-varianceEl.addEventListener("input", () => { varianceValEl.textContent = varianceEl.value; });
-
-function drawGraph(timeline){
-  // Resize for device pixels for crispness
+/* ========= Graph ========= */
+const graph = $("#graph"); const ctx = graph.getContext("2d");
+function drawGraph(tl){
   const dpr = window.devicePixelRatio || 1;
   const cssW = graph.clientWidth, cssH = graph.clientHeight;
-  if (graph.width !== cssW*dpr || graph.height !== cssH*dpr){
-    graph.width = cssW*dpr; graph.height = cssH*dpr;
+  if (graph.width !== cssW*dpr || graph.height !== cssH*dpr){ graph.width = cssW*dpr; graph.height = cssH*dpr; }
+  ctx.save(); ctx.scale(dpr,dpr);
+  const W = cssW, H = cssH; ctx.clearRect(0,0,W,H);
+  // bg + zero
+  ctx.fillStyle = "#f7fafc"; ctx.fillRect(0,0,W,H);
+  const midY = H/2; ctx.strokeStyle = "#cbd5e0"; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(0, midY); ctx.lineTo(W, midY); ctx.stroke();
+  if (!tl || !tl.length){ ctx.restore(); return; }
+  let minZ = 0, maxZ = 0; tl.forEach(p => { if (p.zone < minZ) minZ = p.zone; if (p.zone > maxZ) maxZ = p.zone; });
+  const pad = 0.4; minZ -= pad; maxZ += pad; if (maxZ - minZ < 1e-6){ maxZ = minZ + 1; }
+  const xStep = W / Math.max(1, (tl.length - 1)); const yScale = (H - 16) / (maxZ - minZ); const yOf = z => H - ((z - minZ) * yScale);
+  for (let i=1;i<tl.length;i++){
+    const a = tl[i-1], b = tl[i]; const x1 = (i-1)*xStep, x2 = i*xStep; const y1 = yOf(a.zone), y2 = yOf(b.zone);
+    const sign = (a.zone + b.zone)/2 >= 0 ? "blue" : "red"; ctx.strokeStyle = sign === "blue" ? "#2b6cb0" : "#c53030"; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
   }
-  ctx.save();
-  ctx.scale(dpr,dpr);
-  const W = cssW, H = cssH;
-  ctx.clearRect(0,0,W,H);
-
-  // Background halves for quick read
-  ctx.fillStyle = "#f7fafc"; // light bg
-  ctx.fillRect(0,0,W,H);
-  // zero line
-  const midY = H/2;
-  ctx.strokeStyle = "#cbd5e0";
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(0, midY);
-  ctx.lineTo(W, midY);
-  ctx.stroke();
-
-  if (!timeline || timeline.length === 0){ ctx.restore(); return; }
-
-  // find min/max for scaling Y (zone typically between -2..+2)
-  let minZ = 0, maxZ = 0;
-  timeline.forEach(p => { if (p.zone < minZ) minZ = p.zone; if (p.zone > maxZ) maxZ = p.zone; });
-  const pad = 0.4; // little padding
-  minZ -= pad; maxZ += pad;
-  if (maxZ - minZ < 1e-6){ maxZ = minZ + 1; } // avoid div0
-
-  // equal cadence: x step per tick
-  const xStep = W / Math.max(1, (timeline.length - 1));
-  const yScale = (H - 16) / (maxZ - minZ); // little top/bottom padding
-  const yOf = (z) => H - ((z - minZ) * yScale);
-
-  // draw segments colored by sign
-  for (let i=1;i<timeline.length;i++){
-    const a = timeline[i-1], b = timeline[i];
-    const x1 = (i-1)*xStep, x2 = i*xStep;
-    const y1 = yOf(a.zone), y2 = yOf(b.zone);
-    const sign = (a.zone + b.zone)/2 >= 0 ? "blue" : "red";
-    ctx.strokeStyle = sign === "blue" ? "#2b6cb0" : "#c53030";
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(x1, y1);
-    ctx.lineTo(x2, y2);
-    ctx.stroke();
-  }
-
-  // draw current point
-  const last = timeline[timeline.length-1];
-  ctx.fillStyle = last.zone >= 0 ? "#2b6cb0" : "#c53030";
-  ctx.beginPath();
-  ctx.arc((timeline.length-1)*xStep, yOf(last.zone), 4, 0, Math.PI*2);
-  ctx.fill();
-
-  // axis labels
-  ctx.fillStyle = "#4a5568";
-  ctx.font = "12px system-ui, -apple-system, Segoe UI, Roboto, Arial";
-  ctx.fillText(`max ${maxZ.toFixed(1)}`, 8, 12);
-  ctx.fillText(`0`, 8, midY-4);
-  ctx.fillText(`min ${minZ.toFixed(1)}`, 8, H-6);
+  const last = tl[tl.length-1]; ctx.fillStyle = last.zone >= 0 ? "#2b6cb0" : "#c53030"; ctx.beginPath(); ctx.arc((tl.length-1)*xStep, yOf(last.zone), 4, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = "#4a5568"; ctx.font = "12px system-ui, -apple-system, Segoe UI, Roboto, Arial"; ctx.fillText(`max ${maxZ.toFixed(1)}`, 8, 12); ctx.fillText(`0`, 8, midY-4); ctx.fillText(`min ${minZ.toFixed(1)}`, 8, H-6);
   ctx.restore();
 }
 
-$("#runBtn").addEventListener("click", () => {
-  const seed  = seedEl.value.trim() || "seed";
-  const ticks = parseInt(ticksEl.value, 10) || 26;
-  const dt    = parseInt(dtEl.value, 10) || 5;
-  const scale = parseInt(scaleEl.value, 10) || 60;
-  const variancePct = parseInt(varianceEl.value, 10) || 0;
+/* ========= Round Summary (how, play, MVP) ========= */
+function summarizeRound(out){
+  const tl = out.timeline;
+  const total = tl.length;
+  const blueTicks = tl.filter(p => p.zone > 0).length;
+  const redTicks  = tl.filter(p => p.zone < 0).length;
+  const bluePct = Math.round(100 * blueTicks / total);
+  const redPct  = Math.round(100 * redTicks / total);
 
-  $("#runBtn").disabled = true;
-  const out = simulateRound({ seed, ticks, dt, scale, variancePct });
+  // Max swing (biggest |delta|)
+  let maxSwing = {i:0, d:0};
+  tl.forEach((p,i)=>{ const ad = Math.abs(p.delta); if (ad > Math.abs(maxSwing.d)) maxSwing = {i, d:p.delta}; });
+  const ms = maxSwing;
+  const swing = tl[ms.i];
+  const swingBefore = tl[Math.max(0, ms.i-1)];
+  const swingAfter  = tl[Math.min(tl.length-1, ms.i+1)];
+  const swingTeam = ms.d > 0 ? "Stormfront (Blue)" : "Fire Ferrets (Red)";
 
-  const head =
-`=== Round Result ===
-Winner: ${out.winner}
-Final zone position (blue+=adv): ${out.zone}
-End stamina — Blue: ${out.stamina.blue}, Red: ${out.stamina.red}
-End composure — Blue: ${out.composure.blue}, Red: ${out.composure.red}`;
-
-  $("#result").textContent = head;
-  $("#timeline").textContent = out.timeline.map(x => `${String(x.time).padStart(3," ")}s   zone:${x.zone >= 0 ? "+" : ""}${x.zone}`).join("\n");
-
-  // draw graph
-  drawGraph(out.timeline);
-
-  // commentary rendering: instant or slow cadence
-  const container = $("#log");
-  container.textContent = "";
-  const lines = out.lines.length ? out.lines : ["— (Quiet round — increase variance or change stats)"];
-  if (!$("#slow").checked){
-    container.textContent = lines.map(s => "- " + s).join("\n");
-    $("#runBtn").disabled = false;
-    return;
+  // Win condition text
+  let winText = "Draw on time at midfield.";
+  if (out.winner.includes("Blue")){
+    winText = `Stormfront by zone advantage (final zone ${out.zone > 0 ? "+" : ""}${out.zone}).`;
+  } else if (out.winner.includes("Red")){
+    winText = `Fire Ferrets by zone advantage (final zone ${out.zone}).`;
   }
-  const ms = clamp(parseInt($("#cadence").value||"280",10), 30, 4000);
-  let i = 0;
-  const timer = setInterval(() => {
-    container.textContent += (i===0?"":"\n") + "- " + lines[i];
-    i++;
-    if (i >= lines.length){
-      clearInterval(timer);
-      $("#runBtn").disabled = false;
-    }
-  }, ms);
-});
 
-$("#swapBtn").addEventListener("click", () => {
-  const tmp = blue; blue = red; red = tmp;
-  renderRosters();
-  $("#result").textContent = "—";
-  $("#log").textContent = "—";
-  $("#timeline").textContent = "—";
-  drawGraph([]); // clear
-});
+  // MVP heuristic (fun, simple):
+  // OffenseScore = avg(STR,PRC,INI,RHY); DefenseScore = avg(GST,AWR,CMP,POS).
+  // If Blue wins, pick blue player with best (OffScore * avg STM + DefScore * avg CMP weight).
+  function playerScores(team, avgSTM, avgCMP){
+    return team.map(p => {
+      const off = (p.STR + p.PRC + p.INI + p.RHY)/4;
+      const def = (p.GST + p.AWR + p.CMP + p.POS)/4;
+      const score = off * (0.6 + 0.4*avgSTM) + def * (0.4 + 0.6*avgCMP);
+      return { name: p.name, off, def, score: Math.round(score) };
+    }).sort((a,b)=>b.score-a.score);
+  }
+  const avgSTMblue = avg(tl.map(x=>x.stamB));
+  const avgSTMred  = avg(tl.map(x=>x.stamR));
+  const avgCMPblue = avg(tl.map(x=>x.compB));
+  const avgCMPred  = avg(tl.map(x=>x.compR));
+  let mvpList, mvpTeam;
+  if (out.winner.includes("Blue")){
+    mvpList = playerScores(blue, avgSTMblue, avgCMPblue); mvpTeam="Stormfront";
+  } else if (out.winner.includes("Red")){
+    mvpList = playerScores(red,  avgSTMred,  avgCMPred ); mvpTeam="Fire Ferrets";
+  } else {
+    // Draw: pick top from both, then choose by whose side zone ended nearer
+    const a = playerScores(blue, avgSTMblue, avgCMPblue)[0];
+    const b = playerScores(red,  avgSTMred,  avgCMPred )[0];
+    mvpList = [a,b]; mvpTeam = Math.abs(out.zone) < 0.05 ? "Tie" : (out.zone>0?"Stormfront":"Fire Ferrets");
+  }
+  const mvp = mvpList[0];
 
-$("#resetBtn").addEventListener("click", () => {
-  blue = JSON.parse(JSON.stringify(DEFAULT_BLUE));
-  red  = JSON.parse(JSON.stringify(DEFAULT_RED));
-  renderRosters();
-  $("#result").textContent = "—";
-  $("#log").textContent = "—";
-  $("#timeline").textContent = "—";
-  drawGraph([]); // clear
-});
-
-/* ===== Modal open/close ===== */
-const openBtn = $("#openGuide");
-const closeBtn = $("#closeGuide");
-const closeBtn2 = $("#closeGuide2");
-const backdrop = $("#statsGuideBackdrop");
-const dialog = $("#statsGuide");
-let lastFocus = null;
-function openModal(){ lastFocus = document.activeElement; backdrop.style.display = "flex"; backdrop.setAttribute("aria-hidden","false"); dialog.focus(); }
-function closeModal(){ backdrop.style.display = "none"; backdrop.setAttribute("aria-hidden","true"); if (lastFocus) lastFocus.focus(); }
-openBtn.addEventListener("click", openModal);
-closeBtn.addEventListener("click", closeModal);
-closeBtn2.addEventListener("click", closeModal);
-backdrop.addEventListener("click", (e)=>{ if(e.target === backdrop) closeModal(); });
-window.addEventListener("keydown", (e)=>{ if(e.key === "Escape" && backdrop.style.display==="flex") closeModal(); });
-
-</script>
-</body>
-</html>
+  // Play of the Round narrative
+  const playDetail = `${swing.time}s — ${sw
