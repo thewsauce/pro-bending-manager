@@ -1,98 +1,197 @@
-import {avg, clamp, fmt, mulberry32} from "./util.js";
+// src/sim.js
+// Core simulator: single 3:00 round, ticked at dt seconds.
+// Symmetric math, paired jitter to avoid color bias, and optional first-mover opener.
 
-export function teamBaseStaminaFromRoster(team){ const s = avg(team.map(p=>p.STM)); return 0.85 + (s/100)*0.30; }
-export function teamBaseComposureFromRoster(team){ const c = avg(team.map(p=>p.CMP)); return 0.85 + (c/100)*0.30; }
+// Helpers from util.js
+import { clamp } from "./util.js";
+import { mulberry32 } from "./util.js"; // for internal seeded jitter if needed
 
-function teamOffense(players, stam, comp){
-  const vals=[]; players.forEach(p=>vals.push(p.STR,p.PRC,p.INI,p.RHY));
-  return avg(vals) * stam * (0.6 + 0.4*comp);
+// --- internal helpers ---
+function avg(arr) {
+  if (!arr || !arr.length) return 0;
+  let s = 0;
+  for (let i = 0; i < arr.length; i++) s += arr[i];
+  return s / arr.length;
 }
-function teamDefense(players, stam, comp){
-  const vals=[]; players.forEach(p=>vals.push(p.GST,p.AWR,p.CMP,p.POS));
-  return avg(vals) * (0.5 + 0.5*stam) * (0.7 + 0.3*comp);
+
+function teamAvgStat(team, key) {
+  return avg(team.map(p => p[key] ?? 0));
 }
 
-export function simulateRound({seed, dt, scale, variancePct, blue, red, carry}){
-  const rng = mulberry32(seed || "seed");
-  const ticks = Math.max(1, Math.floor(180 / dt));
+function offenseScore(team, stam, comp) {
+  // Off = avg(STR,PRC,INI,RHY) * stam * (0.6 + 0.4*comp)
+  const core = avg(team.map(p => avg([p.STR, p.PRC, p.INI, p.RHY])));
+  return core * stam * (0.6 + 0.4 * comp);
+}
 
-  let stamB = carry?.stamB ?? teamBaseStaminaFromRoster(blue);
-  let stamR = carry?.stamR ?? teamBaseStaminaFromRoster(red);
-  let compB = carry?.compB ?? teamBaseComposureFromRoster(blue);
-  let compR = carry?.compR ?? teamBaseComposureFromRoster(red);
+function defenseScore(team, stam, comp) {
+  // Def = avg(GST,AWR,CMP,POS) * (0.5 + 0.5*stam) * (0.7 + 0.3*comp)
+  const core = avg(team.map(p => avg([p.GST, p.AWR, p.CMP, p.POS])));
+  return core * (0.5 + 0.5 * stam) * (0.7 + 0.3 * comp);
+}
 
-  let zone = 0;
-  const timeline = [];
-  const lines = [];
+// --- export: simulate a round ---
+export function simulateRound(opts) {
+  const {
+    seed = "seed",
+    dt = 5,                 // seconds per tick
+    scale = 60,             // larger → heavier footing / smaller swings
+    variancePct = 25,       // 0..100, typical 20–35
+    blue, red,              // arrays of 3 players (buffed copies for this round)
+    carry = null,           // {stamB, stamR, compB, compR} from previous round recovery
+    firstMover = "blue"     // "blue" | "red", decides who gets the opening tick nudge
+  } = opts;
 
-  const exertEarly = 0.020, exertLate = 0.010;
+  // ticks for a 180-second round (3:00)
+  const TICKS = Math.max(1, Math.floor(180 / dt));
 
-  const pick = arr => arr[Math.floor(rng()*arr.length)];
-  const pools = {
-    start: [
-      "Announcer: Bell rings—measured distance, both sides probing.",
-      "Announcer: We’re live—quick testers from the front lines."
-    ],
-    swingBlue: ["Stormfront surge—angles open; precision lands."],
-    swingRed:  ["Ferrets rally—counter-surge snaps the lane."],
-    flipBlue:  ["Zone tilts BLUE—clean territory claim."],
-    flipRed:   ["Zone flips RED—ground reclaimed."],
-    fatigue:   ["Breaths heavy—output dipping, guards lagging."],
-    clutch:    ["Final beats—one clean exchange decides it."]
-  };
+  // Baseline stamina & composure from team averages (or carried over)
+  const stamB0 = carry?.stamB ?? (0.85 + (teamAvgStat(blue, "STM")/100) * 0.30);
+  const stamR0 = carry?.stamR ?? (0.85 + (teamAvgStat(red,  "STM")/100) * 0.30);
+  const compB0 = carry?.compB ?? (0.85 + (teamAvgStat(blue, "CMP")/100) * 0.30);
+  const compR0 = carry?.compR ?? (0.85 + (teamAvgStat(red,  "CMP")/100) * 0.30);
 
-  for (let t=0; t<ticks; t++){
-    const time = t*dt;
-    const exertB = (t < Math.min(6,ticks)) ? exertEarly : exertLate;
-    const exertR = (t < Math.min(6,ticks)) ? exertEarly : exertLate;
+  let stamB = clamp(stamB0, 0.5, 1.25);
+  let stamR = clamp(stamR0, 0.5, 1.25);
+  let compB = clamp(compB0, 0.7, 1.3);
+  let compR = clamp(compR0, 0.7, 1.3);
 
-    const jitter = (pct) => 1 + ((rng()*2-1) * (pct/100));
-    const offB = teamOffense(blue, stamB, compB) * jitter(variancePct);
-    const defB = teamDefense(blue, stamB, compB) * jitter(variancePct);
-    const offR = teamOffense(red,  stamR, compR) * jitter(variancePct);
-    const defR = teamDefense(red,  stamR, compR) * jitter(variancePct);
+  // Opening initiative nudge: one tick, offense-only
+  const starter = (firstMover === "red" || firstMover === "blue") ? firstMover : "blue";
+  const initKickUp   = 1.05; // +5% Offense on tick 0 for starter
+  const initKickDown = 0.95; // -5% Offense on tick 0 for non-starter
 
-    const delta = ((offB - defR) - (offR - defB)) / scale;
+  // Exertion profile
+  const openingTicks = Math.max(1, Math.round(6 / (dt / 5))); // ~first 6s at dt=5 → first tick
+  const exertEarly = 0.020; // stamina cost per tick (winner spends a bit more)
+  const exertLate  = 0.010;
+
+  // Paired jitter scale
+  const V = clamp(variancePct / 100, 0, 1);
+
+  // RNG stream (seeded)
+  const rng = mulberry32(`${seed}:round`);
+
+  // Outputs
+  let zone = 0;               // blue positive, red negative
+  const timeline = [];        // zone after each tick
+  const lines = [];           // commentary lines
+
+  // Telemetry for summary
+  let ticksBlueZone = 0;
+  let ticksRedZone  = 0;
+  let maxSwingMag = 0;
+  let maxSwingIdx = -1;
+  let maxSwingDir = 0; // +1 blue, -1 red
+
+  for (let t = 0; t < TICKS; t++) {
+    // Raw Off/Def before jitter
+    let OffB = offenseScore(blue, stamB, compB);
+    let DefB = defenseScore(blue, stamB, compB);
+    let OffR = offenseScore(red,  stamR, compR);
+    let DefR = defenseScore(red,  stamR, compR);
+
+    // Apply opening initiative to OFFENSE only, tick 0
+    if (t === 0) {
+      if (starter === "blue") {
+        OffB *= initKickUp;
+        OffR *= initKickDown;
+      } else {
+        OffR *= initKickUp;
+        OffB *= initKickDown;
+      }
+    }
+
+    // Paired jitter to remove evaluation-order bias
+    const u = (rng() * 2 - 1) * V; // -V..+V
+    // Offense: Blue gets +u, Red gets -u
+    OffB *= (1 + u);
+    OffR *= (1 - u);
+    // Defense: mirror so each tick net expectation is zero
+    DefB *= (1 - u);
+    DefR *= (1 + u);
+
+    // Momentum net and zone update
+    const mB = OffB - DefR;
+    const mR = OffR - DefB;
+    const delta = ( (mB - mR) ) / scale;
+
     zone += delta;
+    timeline.push(zone);
+    if (zone > 0) ticksBlueZone++; else if (zone < 0) ticksRedZone++;
 
-    timeline.push({ time, zone: +zone.toFixed(3), delta:+delta.toFixed(3), stamB, stamR, compB, compR });
-
-    // stamina dynamics
-    if (delta > 0){ stamB = clamp(stamB - exertB*1.10 + 0.002, 0.50, 1.25); stamR = clamp(stamR - exertR*0.90, 0.50, 1.25); }
-    else if (delta < 0){ stamB = clamp(stamB - exertB*0.90, 0.50, 1.25); stamR = clamp(stamR - exertR*1.10 + 0.002, 0.50, 1.25); }
-    else { stamB = clamp(stamB - exertB*0.98 + 0.001, 0.50, 1.25); stamR = clamp(stamR - exertR*0.98 + 0.001, 0.50, 1.25); }
-
-    // composure dynamics
-    const sign = Math.sign(delta);
-    compB = clamp(compB + (sign>0? +0.006 : -0.005) + (zone>0? +0.001 : -0.001), 0.70, 1.30);
-    compR = clamp(compR + (sign<0? +0.006 : -0.005) + (zone<0? +0.001 : -0.001), 0.70, 1.30);
-
-    // commentary
-    if (t===0) lines.push(pick(pools.start));
+    // Track biggest instantaneous swing for summary
     const mag = Math.abs(delta);
-    const tag = mag > .75 ? "HUGE SWING" : mag > .45 ? "BIG SWING" : mag > .20 ? "shift" : "tap";
-    const who = delta>0 ? "Stormfront" : delta<0 ? "Fire Ferrets" : "Neutral";
-    lines.push(`${String(time).padStart(3," ")}s: ${who} ${tag} Δ${fmt(delta)} | zone:${fmt(zone)} | STM(B/R) ${stamB.toFixed(2)}/${stamR.toFixed(2)} | CMP(B/R) ${compB.toFixed(2)}/${compR.toFixed(2)}`);
-    if (mag>.6) lines.push( (delta>0? pick(pools.swingBlue):pick(pools.swingRed)) );
-    if (Math.abs(zone)>1.0 && (t%3===0)) lines.push( zone>0? pick(pools.flipBlue):pick(pools.flipRed) );
-    if (t===Math.floor(ticks/2)) lines.push(pick(pools.fatigue));
-    if (ticks - t === 3) lines.push(pick(pools.clutch));
+    if (mag > maxSwingMag) {
+      maxSwingMag = mag;
+      maxSwingIdx = t;
+      maxSwingDir = (delta >= 0 ? +1 : -1);
+    }
+
+    // Commentary (lean but informative)
+    const sec = (t+1) * dt;
+    if (Math.abs(delta) > 0.60) {
+      lines.push(`(${sec}s) HUGE SWING: ${delta >= 0 ? "Blue" : "Red"} surges; zone ${(zone>=0?"+":"")}${zone.toFixed(2)}.`);
+    } else if (Math.abs(delta) > 0.30) {
+      lines.push(`(${sec}s) Big push ${delta >= 0 ? "Blue" : "Red"}; zone ${(zone>=0?"+":"")}${zone.toFixed(2)}.`);
+    } else if ((t % Math.max(1, Math.floor(10 / (dt / 5)))) === 0) {
+      lines.push(`(${sec}s) Trading; zone ${(zone>=0?"+":"")}${zone.toFixed(2)}.`);
+    }
+
+    // Stamina dynamics (winner spends more)
+    const exert = t < openingTicks ? exertEarly : exertLate;
+    if (delta > 0) {
+      // Blue winning this tick
+      stamB = clamp(stamB - exert * 1.15, 0.50, 1.25);
+      stamR = clamp(stamR - exert * 0.85 + 0.0015, 0.50, 1.25); // a hair of loser regen
+    } else if (delta < 0) {
+      // Red winning this tick
+      stamR = clamp(stamR - exert * 1.15, 0.50, 1.25);
+      stamB = clamp(stamB - exert * 0.85 + 0.0015, 0.50, 1.25);
+    } else {
+      stamB = clamp(stamB - exert, 0.50, 1.25);
+      stamR = clamp(stamR - exert, 0.50, 1.25);
+    }
+
+    // Composure dynamics (reacts to current pressure and standing)
+    const zBiasB = zone > 0 ? +0.001 : -0.001;
+    const zBiasR = zone < 0 ? +0.001 : -0.001;
+    compB = clamp(compB + (delta > 0 ? +0.006 : (delta < 0 ? -0.005 : 0)) + zBiasB, 0.70, 1.30);
+    compR = clamp(compR + (delta < 0 ? +0.006 : (delta > 0 ? -0.005 : 0)) + zBiasR, 0.70, 1.30);
   }
 
-  const winner = zone > 0.10 ? "Stormfront (Blue)" : zone < -0.10 ? "Fire Ferrets (Red)" : "Draw";
-  return { winner, zone:+zone.toFixed(2), timeline, lines,
-           endFactors:{stamB,stamR,compB,compR} };
+  // Decide winner by final zone
+  let winner = "Draw";
+  if (zone > +0.10) winner = "Blue";
+  else if (zone < -0.10) winner = "Red";
+
+  // End factors for recovery
+  const endFactors = { stamB, stamR, compB, compR, ticksBlueZone, ticksRedZone, maxSwingMag, maxSwingIdx, maxSwingDir };
+
+  return {
+    winner,
+    zone: +zone.toFixed(3),
+    lines,
+    timeline,
+    endFactors
+  };
 }
 
-export function recoverBetweenRounds(blue, red, end){
-  const avgENDb = avg(blue.map(p=>p.END));
-  const avgENDr = avg(red.map(p=>p.END));
-  const recB = 0.04 + (avgENDb/100)*0.06;
-  const recR = 0.04 + (avgENDr/100)*0.06;
-  return {
-    stamB: clamp(end.stamB + recB, 0.60, 1.10),
-    stamR: clamp(end.stamR + recR, 0.60, 1.10),
-    compB: clamp(end.compB + (1.0 - end.compB)*0.08, 0.75, 1.15),
-    compR: clamp(end.compR + (1.0 - end.compR)*0.08, 0.75, 1.15),
-  };
+// --- export: between-round recovery ---
+export function recoverBetweenRounds(blue, red, ef) {
+  // Recovery based on endurance and gentle relaxation of composure toward neutral (1.0)
+  const avgENDb = teamAvgStat(blue, "END");
+  const avgENDr = teamAvgStat(red,  "END");
+
+  const recB = 0.04 + (avgENDb/100) * 0.06; // 0.04..0.10
+  const recR = 0.04 + (avgENDr/100) * 0.06;
+
+  const stamB = clamp((ef?.stamB ?? 1.0) + recB, 0.60, 1.10);
+  const stamR = clamp((ef?.stamR ?? 1.0) + recR, 0.60, 1.10);
+
+  const compRelax = 0.08;
+  const compB = clamp((ef?.compB ?? 1.0) + (1.0 - (ef?.compB ?? 1.0)) * compRelax, 0.75, 1.15);
+  const compR = clamp((ef?.compR ?? 1.0) + (1.0 - (ef?.compR ?? 1.0)) * compRelax, 0.75, 1.15);
+
+  return { stamB, stamR, compB, compR };
 }
