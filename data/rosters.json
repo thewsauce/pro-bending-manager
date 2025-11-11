@@ -1,0 +1,14 @@
+{
+  "players": {
+    "cheri":  {"name":"Cheri","el":"earth","gender":"f","INI":88,"STR":82,"PRC":79,"GST":74,"AWR":80,"RHY":83,"CMP":74,"POS":75,"STM":76,"END":72},
+    "taelon": {"name":"Taelon","el":"water","gender":"m","INI":78,"STR":86,"PRC":90,"GST":82,"AWR":92,"RHY":91,"CMP":94,"POS":92,"STM":80,"END":82},
+    "dori":   {"name":"Dori","el":"fire","gender":"f","INI":68,"STR":80,"PRC":82,"GST":92,"AWR":90,"RHY":86,"CMP":94,"POS":91,"STM":88,"END":86},
+    "korra":  {"name":"Korra","el":"water","gender":"f","INI":90,"STR":94,"PRC":78,"GST":70,"AWR":72,"RHY":80,"CMP":65,"POS":74,"STM":84,"END":79},
+    "mako":   {"name":"Mako","el":"fire","gender":"m","INI":80,"STR":76,"PRC":88,"GST":78,"AWR":90,"RHY":86,"CMP":92,"POS":90,"STM":80,"END":78},
+    "bolin":  {"name":"Bolin","el":"earth","gender":"m","INI":68,"STR":82,"PRC":74,"GST":90,"AWR":85,"RHY":80,"CMP":88,"POS":88,"STM":88,"END":90}
+  },
+  "teams": {
+    "Stormfront": ["cheri","taelon","dori"],
+    "FireFerrets": ["korra","mako","bolin"]
+  }
+}
