@@ -2,7 +2,7 @@ name: Build and Deploy to GitHub Pages
 
 on:
   push:
-    branches: [ main ]   # or 'master' if that's your default
+    branches: [ main ]
   workflow_dispatch:
 
 permissions:
@@ -24,11 +24,10 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: 'npm'
+          node-version: 20   # no cache here (we have no lockfile)
 
-      - name: Install deps
-        run: npm ci || npm i
+      - name: Install dependencies
+        run: npm install     # <-- use install, not ci
 
       - name: Build with Vite
         run: npm run build
