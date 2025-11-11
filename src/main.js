@@ -1,31 +1,26 @@
 // src/main.js
-// App wiring: loads rosters, applies round variance (mood/element/style),
-// runs the simulator, renders commentary/graph/summary, and handles recovery.
-
 import { loadRosters, teamFromIds, rosterText } from "./data.js";
 import {
   validateTeamElements,
   validateAllowedElements,
   elementRuleMessage,
 } from "./validators.js";
-import {
-  simulateRound,
-  recoverBetweenRounds,
-} from "./sim.js";
+import { simulateRound, recoverBetweenRounds } from "./sim.js";
 import { drawGraph } from "./graph.js";
 import { summarizeRound } from "./summary.js";
 import { applyRoundVariance } from "./variance.js";
 import { mulberry32 } from "./util.js";
+import { setupTeamModal } from "./team_modal.js";
 
 const $ = (sel) => document.querySelector(sel);
 
 const state = {
-  base: null,       // raw rosters.json
-  blue: null,       // current blue roster (unbuffed baseline)
-  red: null,        // current red roster (unbuffed baseline)
-  carry: null,      // { stamB, stamR, compB, compR } between-round baselines
+  base: null,
+  blue: null,
+  red: null,
+  carry: null, // {stamB, stamR, compB, compR}
   round: 1,
-  locked: false,    // round results locked until Next
+  locked: false,
 };
 
 function renderRosters() {
@@ -44,7 +39,7 @@ function updateTicks() {
     const base = await loadRosters();
     state.base = base;
 
-    // Pick your default teams from the JSON (adjust names to your file)
+    // Default teams (adjust names if yours differ)
     const blueIds = base.teams.Stormfront || Object.values(base.teams)[0];
     const redIds  = base.teams.FireFerrets || Object.values(base.teams)[1];
 
@@ -53,6 +48,29 @@ function updateTicks() {
 
     renderRosters();
     updateTicks();
+
+    // Init modal
+    setupTeamModal(
+      state.base,
+      () => ({ blueIds: state.blue.map(p=>p.id), redIds: state.red.map(p=>p.id) }),
+      ({ blueIds, redIds }) => {
+        state.blue = teamFromIds(state.base, blueIds);
+        state.red  = teamFromIds(state.base, redIds);
+
+        // reset match state on team change
+        state.carry = null;
+        state.round = 1;
+        state.locked = false;
+        $("#roundNo").textContent = "1";
+        $("#result").textContent = "—";
+        $("#summary").textContent = "—";
+        $("#log").textContent = "—";
+        drawGraph($("#graph"), []);
+        renderRosters();
+        $("#nextBtn").disabled = true;
+        $("#runBtn").disabled = false;
+      }
+    );
 
     $("#boot").textContent = "Rosters loaded.";
     $("#runBtn").disabled = false;
@@ -66,7 +84,6 @@ function updateTicks() {
 $("#dt").addEventListener("input", updateTicks);
 
 $("#resetBtn").addEventListener("click", () => {
-  // Full reset to JSON baselines
   const base = state.base;
   const blueIds = base.teams.Stormfront || Object.values(base.teams)[0];
   const redIds  = base.teams.FireFerrets || Object.values(base.teams)[1];
@@ -82,7 +99,6 @@ $("#resetBtn").addEventListener("click", () => {
   $("#summary").textContent = "—";
   $("#log").textContent = "—";
   drawGraph($("#graph"), []);
-
   renderRosters();
   $("#nextBtn").disabled = true;
   $("#runBtn").disabled = false;
@@ -115,13 +131,12 @@ $("#runBtn").addEventListener("click", () => {
   $("#runBtn").disabled = true;
   $("#nextBtn").disabled = true;
 
-  // Pre-round variance (mood + element + play-styles) — applied only to this round
+  // Pre-round variance (mood + element + play-styles)
   const rngBlue = mulberry32(`${seed}:round${state.round}:blue`);
   const rngRed  = mulberry32(`${seed}:round${state.round}:red`);
   const { team: blueRound, notes: blueNotes } = applyRoundVariance(state.blue, rngBlue);
   const { team: redRound,  notes: redNotes  } = applyRoundVariance(state.red,  rngRed);
 
-  // Preface: show the rolls before commentary
   const preface = [
     `— Round ${state.round} pre-buffs —`,
     ...blueNotes.map(s => `[Blue] ${s}`),
@@ -130,7 +145,6 @@ $("#runBtn").addEventListener("click", () => {
   ].join("\n");
   $("#log").textContent = preface;
 
-  // Run the round with the buffed copies; carry baselines still come from sim’s end factors
   const out = simulateRound({
     seed, dt, scale, variancePct,
     blue: blueRound,
@@ -138,19 +152,17 @@ $("#runBtn").addEventListener("click", () => {
     carry: state.carry
   });
 
-  // Result text
   $("#result").textContent =
     `Round ${state.round} Winner: ${out.winner}\n` +
     `Final zone: ${(out.zone >= 0 ? "+" : "") + out.zone}`;
 
-  // Append tick-by-tick commentary after preface (respect slow/fast handled inside simulateRound previously; here we just dump)
-  $("#log").textContent += out.lines.length ? out.lines.map(s => "- " + s).join("\n").replace(/^/m, "\n") : "\n— (Quiet round)";
+  $("#log").textContent += out.lines.length
+    ? out.lines.map(s => "- " + s).join("\n").replace(/^/m, "\n")
+    : "\n— (Quiet round)";
 
-  // Graph + Summary
   drawGraph($("#graph"), out.timeline);
   $("#summary").textContent = summarizeRound(out, state.blue, state.red);
 
-  // Between-round baselines (recovery from end factors, based on unbuffed roster END/CMP influence inside recover fn)
   state.carry = recoverBetweenRounds(state.blue, state.red, out.endFactors);
 
   state.locked = true;
