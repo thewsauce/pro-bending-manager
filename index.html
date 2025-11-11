@@ -1,584 +1,81 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Pro-Bending Manager — Match Sim (fetch rosters.json)</title>
-<style>
-  :root { font-family: system-ui, Segoe UI, Roboto, Arial, sans-serif; color-scheme: light dark; }
-  body { margin: 24px; line-height: 1.45; }
-  h1 { font-size: 1.25rem; margin: 0 0 8px; }
-  .row { display: flex; gap: 16px; flex-wrap: wrap; }
-  .card { border: 1px solid #ddd; border-radius: 8px; padding: 12px; flex: 1 1 320px; }
-  label { font-size: .9rem; margin-right: 10px; display:inline-flex; align-items:center; gap:6px;}
-  input[type="number"], input[type="text"], input[type="range"] { padding: 4px 6px; }
-  button { padding: 8px 12px; border: 1px solid #444; border-radius: 6px; background: #111; color: #fff; cursor: pointer; }
-  button:disabled { opacity: .5; cursor: default; }
-  pre { white-space: pre-wrap; word-wrap: break-word; background: #fafafa; border-radius: 6px; padding: 10px; margin: 0; }
-  .muted { color: #555; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-  .pill { padding: 2px 8px; border-radius:999px; background:#111; color:#fff; font-size:.8rem; }
-  .flex { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
-
-  .graph-wrap { position: relative; }
-  canvas { width: 100%; height: 220px; border-radius: 8px; border: 1px solid #eee; background: #fff; }
-
-  .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: none; align-items: center; justify-content: center; z-index: 1000; }
-  .modal { background: #fff; color:#111; width:min(800px, 92vw); max-height: 85vh; border-radius:12px; box-shadow: 0 20px 50px rgba(0,0,0,.35); overflow: hidden; display:flex; flex-direction:column; }
-  .modal header{ padding:14px 16px; border-bottom:1px solid #eee; display:flex; align-items:center; justify-content:space-between }
-  .modal header h3{ margin:0; font-size:1.05rem }
-  .modal .content{ padding:14px 16px; overflow:auto }
-  .modal .content h4{ margin:14px 0 6px; font-size:1rem }
-  .modal .content p{ margin:6px 0 }
-  .modal footer{ padding:12px 16px; border-top:1px solid #eee; display:flex; justify-content:flex-end; gap:8px }
-  .icon-btn{ background:transparent; color:#111; border:1px solid #ccc; border-radius:8px; padding:6px 10px; cursor:pointer; }
-</style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Pro-Bending Manager</title>
+  <style>
+    :root { font-family: system-ui, Segoe UI, Roboto, Arial, sans-serif; }
+    body { margin: 24px; line-height: 1.45; }
+    .row{display:flex;gap:16px;flex-wrap:wrap}
+    .card{border:1px solid #ddd;border-radius:8px;padding:12px;flex:1 1 320px}
+    pre{white-space:pre-wrap;background:#fafafa;border-radius:6px;padding:10px;margin:0}
+    button{padding:8px 12px;border:1px solid #444;border-radius:6px;background:#111;color:#fff;cursor:pointer}
+    button:disabled{opacity:.5;cursor:default}
+    canvas{width:100%;height:220px;border:1px solid #eee;border-radius:8px;background:#fff}
+    .muted{color:#555}
+    label{display:inline-flex;align-items:center;gap:6px;margin-right:10px}
+    input{padding:4px 6px}
+  </style>
 </head>
 <body>
-  <h1>Pro-Bending Manager — Text-Only Match Sim</h1>
-  <p class="muted">
-    Fetches <code>/data/rosters.json</code> • 3-minute rounds • detailed summaries • MVP • between-round recovery • slow announcer • color timeline.
-    <button id="openGuide" class="icon-btn" aria-haspopup="dialog" aria-controls="statsGuide">📘 Stats Guide</button>
-  </p>
+  <h1>Pro-Bending Manager</h1>
+  <p class="muted">3-minute rounds • summaries • MVP • between-round recovery</p>
 
   <div class="row">
-    <div class="card" style="max-width: 700px;">
-      <h2 style="font-size:1.05rem;margin:0 0 8px;">Controls</h2>
-      <div class="flex">
-        <label>Seed <input id="seed" type="text" value="stormfront42" class="mono" style="width:140px;"></label>
-        <label>Δt (sec) <input id="dt" type="number" min="1" max="10" step="1" value="5" /></label>
-        <span class="muted">Ticks auto = <span id="ticksAuto">—</span> (fixed round 180s)</span>
-        <label>Scale <input id="scale" type="number" min="20" max="200" step="5" value="60" /></label>
+    <div class="card" style="max-width:720px">
+      <h2 style="margin:0 0 8px">Controls</h2>
+      <div>
+        <label>Seed <input id="seed" value="stormfront42" style="width:140px"></label>
+        <label>Δt <input id="dt" type="number" min="1" max="10" step="1" value="5"></label>
+        <span class="muted">Ticks = <b id="ticksAuto">—</b> (180/Δt)</span>
+        <label>Scale <input id="scale" type="number" min="20" max="200" step="5" value="60"></label>
       </div>
-      <div class="flex" style="margin-top:8px;">
-        <label>Variance
-          <input id="variance" type="range" min="0" max="100" value="30">
-          <span id="varianceVal" class="pill">30</span>
-        </label>
-        <label><input id="slow" type="checkbox" checked> Slow Announcer</label>
-        <label>Cadence (ms/line)
-          <input id="cadence" type="number" min="50" max="2000" step="10" value="280" style="width:80px;">
-        </label>
+      <div style="margin-top:8px">
+        <label>Variance <input id="variance" type="range" min="0" max="100" value="30"></label>
+        <label><input id="slow" type="checkbox" checked> Slow announcer</label>
+        <label>Cadence (ms) <input id="cadence" type="number" min="50" max="2000" step="10" value="280" style="width:80px"></label>
       </div>
-      <div class="flex" style="margin-top:10px;">
-        <button id="runBtn" disabled>Run Round <span class="muted">(Round <span id="roundNo">1</span>)</span></button>
+      <div style="margin-top:10px">
+        <button id="runBtn" disabled>Run Round (<span id="roundNo">1</span>)</button>
         <button id="nextBtn" disabled>Next Round</button>
-        <button id="resetMatchBtn" class="icon-btn" disabled>Reset Match</button>
-        <button id="selfTestBtn" class="icon-btn" title="Sanity check" disabled>Quick Self-Test</button>
-        <span class="muted">Round length fixed: <b>180s</b></span>
+        <button id="resetBtn" disabled>Reset Match</button>
+        <span id="boot" class="muted" style="margin-left:8px">Loading rosters…</span>
       </div>
-      <p class="muted" id="bootStatus">Loading rosters…</p>
     </div>
 
     <div class="card">
-      <h2 style="font-size:1.05rem;margin:0 0 8px;">Result</h2>
+      <h2 style="margin:0 0 8px">Result</h2>
       <pre id="result">—</pre>
     </div>
   </div>
 
-  <div class="row" style="margin-top:16px;">
+  <div class="row" style="margin-top:16px">
     <div class="card">
-      <h2 style="font-size:1.05rem;margin:0 0 8px;">Blue Team (Stormfront)</h2>
-      <pre id="blueRoster" class="mono">—</pre>
+      <h2 style="margin:0 0 8px">Blue Team</h2>
+      <pre id="blueRoster">—</pre>
     </div>
     <div class="card">
-      <h2 style="font-size:1.05rem;margin:0 0 8px;">Red Team (Fire Ferrets)</h2>
-      <pre id="redRoster" class="mono">—</pre>
+      <h2 style="margin:0 0 8px">Red Team</h2>
+      <pre id="redRoster">—</pre>
     </div>
   </div>
 
-  <div class="card" style="margin-top:16px;">
-    <h2 style="font-size:1.05rem;margin:0 0 8px;">Commentary</h2>
+  <div class="card" style="margin-top:16px">
+    <h2 style="margin:0 0 8px">Commentary</h2>
     <pre id="log">—</pre>
   </div>
 
-  <div class="card graph-wrap" style="margin-top:16px;">
-    <h2 style="font-size:1.05rem;margin:0 0 8px;">Timeline Graph (equal cadence)</h2>
-    <canvas id="graph" width="900" height="220" aria-label="Zone progression chart"></canvas>
-    <p class="muted" style="margin-top:8px;">
-      Blue = momentum toward Blue, Red = toward Red. Zero line is mid-field. Each step = one tick.
-    </p>
+  <div class="card" style="margin-top:16px">
+    <h2 style="margin:0 0 8px">Timeline</h2>
+    <canvas id="graph" width="900" height="220"></canvas>
   </div>
 
-  <div class="card" style="margin-top:16px;">
-    <h2 style="font-size:1.05rem;margin:0 0 8px;">Round Summary</h2>
+  <div class="card" style="margin-top:16px">
+    <h2 style="margin:0 0 8px">Round Summary</h2>
     <pre id="summary">—</pre>
   </div>
 
-  <div class="card" style="margin-top:16px;">
-    <h2 style="font-size:1.05rem;margin:0 0 8px;">Timeline (text)</h2>
-    <pre id="timeline" class="mono">—</pre>
-  </div>
-
-  <!-- ===== Modal: Stats Guide ===== -->
-  <div id="statsGuideBackdrop" class="modal-backdrop" role="presentation" aria-hidden="true">
-    <div id="statsGuide" class="modal" role="dialog" aria-modal="true" aria-labelledby="guideTitle" aria-describedby="guideBody" tabindex="-1">
-      <header>
-        <h3 id="guideTitle">Stats Guide & What They Do</h3>
-        <button id="closeGuide" class="icon-btn" aria-label="Close">✕</button>
-      </header>
-      <div class="content" id="guideBody">
-        <h4>Player Attributes (0–100)</h4>
-        <p><b>INI</b> Initiative — fast openers and reactions. <b>STR</b> Strike Potency — raw push. <b>PRC</b> Precision — accuracy/clean hits.</p>
-        <p><b>GST</b> Guard Stability — block integrity. <b>AWR</b> Awareness — reads/anticipation. <b>RHY</b> Rhythm — keeps tempo steady.</p>
-        <p><b>CMP</b> Composure — steadiness under pressure. <b>POS</b> Position Sense — spacing/formation discipline.</p>
-        <p><b>STM</b> Stamina — short-term energy pool. <b>END</b> Endurance — performance retention as STM dips.</p>
-        <h4>Round Controls</h4>
-        <p><b>Δt</b> sets tick spacing; <b>Ticks</b> auto = 180 / Δt (3:00 cap). <b>Scale</b> calms the meter (bigger = slower zone movement). <b>Variance</b> = ±randomness. <b>Seed</b> = deterministic randomness.</p>
-        <h4>Under the Hood (simplified)</h4>
-        <p>Each tick: Offense = avg(STR, PRC, INI, RHY) × Stamina × Composure; Defense = avg(GST, AWR, CMP, POS) × Stamina × Composure. Off−Def → momentum → zone drift. Pushing drains STM; swings nudge CMP. Between rounds: small recovery.</p>
-      </div>
-      <footer><button id="closeGuide2" class="icon-btn">Close</button></footer>
-    </div>
-  </div>
-
-<script>
-/* ========= Seeded RNG ========= */
-function mulberry32(seedStr) {
-  let h = 1779033703 ^ seedStr.length;
-  for (let i = 0; i < seedStr.length; i++) {
-    h = Math.imul(h ^ seedStr.charCodeAt(i), 3432918353);
-    h = (h << 13) | (h >>> 19);
-  }
-  return function() {
-    h = Math.imul(h ^ (h >>> 16), 2246822507);
-    h = Math.imul(h ^ (h >>> 13), 3266489909);
-    const t = (h ^= h >>> 16) >>> 0;
-    return (t / 4294967296);
-  };
-}
-
-/* ========= Data loading (fetch rosters.json with local override) ========= */
-async function loadRosters() {
-  const local = localStorage.getItem("rosters.v1");
-  if (local) return JSON.parse(local);
-  const res = await fetch("./data/rosters.json?v=" + Date.now(), { cache: "no-store" });
-  if (!res.ok) throw new Error("Failed to load data/rosters.json");
-  return await res.json();
-}
-function saveRostersToLocal(updatedBase){
-  localStorage.setItem("rosters.v1", JSON.stringify(updatedBase));
-}
-function teamFromIds(base, ids){ return ids.map(id => ({ id, ...base.players[id] })); }
-
-/* ========= Globals built after data loads ========= */
-let BASE = null;
-let blueBase = null, redBase = null;
-let blue = null, red = null;
-
-/* ========= Match State ========= */
-const matchState = {
-  round: 1,
-  rngSeed: "stormfront42",
-  stamB: null, stamR: null, compB: null, compR: null,
-  lastTimeline: [],
-  lastWinner: null,
-  locked: false
-};
-
-/* ========= Helpers ========= */
-const $ = sel => document.querySelector(sel);
-const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
-const fmt = n => (n>=0? "+" : "") + n.toFixed(2);
-function avg(arr){ return arr.reduce((a,b)=>a+b,0)/arr.length; }
-
-function rosterText(team){
-  const lines = team.map(p => {
-    const e = p.el ? p.el[0].toUpperCase() + p.el.slice(1) : "?";
-    const g = p.gender ? p.gender.toUpperCase() : "?";
-    const attrs = ["INI","STR","PRC","GST","AWR","RHY","CMP","POS","STM","END"]
-      .map(k => `${k}:${String(p[k]).padStart(2,' ')}`).join(" ");
-    const ovr = Math.round(["INI","STR","PRC","GST","AWR","RHY","CMP","POS"]
-      .reduce((a,k)=>a+p[k],0)/8);
-    return `${p.name.padEnd(10)} | ${e}/${g} | OVR ~ ${String(ovr).padStart(2,' ')} | ${attrs}`;
-  });
-  return lines.join("\n");
-}
-function renderRosters(){
-  $("#blueRoster").textContent = rosterText(blue);
-  $("#redRoster").textContent  = rosterText(red);
-}
-
-/* ========= Factors ========= */
-function teamBaseStaminaFromRoster(team){ const s = avg(team.map(p => p.STM)); return 0.85 + (s/100)*0.30; }
-function teamBaseComposureFromRoster(team){ const c = avg(team.map(p => p.CMP)); return 0.85 + (c/100)*0.30; }
-
-/* ========= Off/Def ========= */
-function teamOffense(players, stam, comp){
-  const vals = []; players.forEach(p => vals.push(p.STR, p.PRC, p.INI, p.RHY));
-  return avg(vals) * stam * (0.6 + 0.4*comp);
-}
-function teamDefense(players, stam, comp){
-  const vals = []; players.forEach(p => vals.push(p.GST, p.AWR, p.CMP, p.POS));
-  return avg(vals) * (0.5 + 0.5*stam) * (0.7 + 0.3*comp);
-}
-
-/* ========= Validators (elements) ========= */
-const ALLOWED_ELEMENTS = new Set(["water","earth","fire"]); // set to include "air" if you want
-function validateTeamElements(team){
-  const counts = {};
-  team.forEach(p => { const el = (p.el||"unknown").toLowerCase(); counts[el] = (counts[el]||0)+1; });
-  const dups = Object.entries(counts).filter(([el,c]) => c > 1).map(([el,c])=>({el,count:c}));
-  return { ok: dups.length === 0, dups };
-}
-function validateAllowedElements(team){
-  const bad = team.filter(p => !ALLOWED_ELEMENTS.has((p.el||"").toLowerCase()));
-  return { ok: bad.length === 0, bad };
-}
-function elementRuleMessage(teamName, res){
-  if (res.ok) return "";
-  const list = res.dups.map(d => `${d.el}×${d.count}`).join(", ");
-  return `${teamName}: invalid element composition — duplicates found (${list}). One bender per element only.`;
-}
-
-/* ========= Commentary Pools ========= */
-const pools = {
-  start: [
-    "Announcer: Bell rings—mid-lane feels tense; both sides measuring distance.",
-    "Announcer: We’re live—quick testers from the front lines, eyes on the zone bar.",
-    "Announcer: Opening clash—tempo bait from controllers, power simmering underneath."
-  ],
-  swingBlue: [
-    "Stormfront surge—Taelon’s zoning carves a lane; Cheri rides the wake.",
-    "Blue rhythm clicks—Dori’s shield lets Cheri fire a clean two-beat volley.",
-    "Taelon reads and redirects—precision lands; blue pressure mounting."
-  ],
-  swingRed: [
-    "Ferrets rally—Mako nets the lane; Korra detonates a counter-surge.",
-    "Red line bites back—Bolin’s wall stands and the follow-through lands.",
-    "Mako’s cadence call hits—blue advance stutters under tight angles."
-  ],
-  flipBlue: [
-    "Officials confirm: territory tilt BLUE—Stormfront step the line.",
-    "Blue panels flare; ring judges signal zone advantage.",
-    "Momentum meter crosses center toward Blue—clean territory claim."
-  ],
-  flipRed: [
-    "Zone flips RED—Ferrets muscle the ground back.",
-    "Red lights up the boundary; territory reclaimed.",
-    "Meter swings to Red—pressure consolidates behind Korra."
-  ],
-  fatigue: [
-    "Breaths are heavy—form frays at the edges; decisions slow by a beat.",
-    "Corner calls for patience—output dipping, guards lagging a hair.",
-    "Pace compresses—every push now costs more stamina than it gives."
-  ],
-  clutch: [
-    "Final beats—composure vs. greed; one clean exchange decides it.",
-    "Clock squeezes the rhythm—any misread becomes the match.",
-    "Silence ripples through the crowd—eyes locked on the meter."
-  ]
-};
-function pick(arr, rng){ return arr[Math.floor(rng()*arr.length)] }
-function stamp(t, s){ return `${String(t).padStart(3," ")}s: ${s}` }
-
-/* ========= Simulation (180s strict) ========= */
-function simulateRound({seed, dt, scale, variancePct}){
-  const rng = mulberry32(seed || "default-seed");
-  const ticks = Math.max(1, Math.floor(180 / dt));
-  $("#ticksAuto").textContent = String(ticks);
-
-  let stamB = matchState.stamB ?? teamBaseStaminaFromRoster(blue);
-  let stamR = matchState.stamR ?? teamBaseStaminaFromRoster(red);
-  let compB = matchState.compB ?? teamBaseComposureFromRoster(blue);
-  let compR = matchState.compR ?? teamBaseComposureFromRoster(red);
-
-  let zone = 0;
-  const timeline = [];
-  const lines = [];
-
-  const exertEarly = 0.020, exertLate = 0.010;
-
-  for (let t = 0; t < ticks; t++){
-    const time = t*dt;
-    const exertB = (t < Math.min(6, ticks)) ? exertEarly : exertLate;
-    const exertR = (t < Math.min(6, ticks)) ? exertEarly : exertLate;
-
-    const jitter = (pct, r) => 1 + ((r()*2-1) * (pct/100));
-    const offB = teamOffense(blue, stamB, compB) * jitter(variancePct, rng);
-    const defB = teamDefense(blue, stamB, compB) * jitter(variancePct, rng);
-    const offR = teamOffense(red,  stamR, compR) * jitter(variancePct, rng);
-    const defR = teamDefense(red,  stamR, compR) * jitter(variancePct, rng);
-
-    const momBlue = offB - defR;
-    const momRed  = offR - defB;
-    const delta = (momBlue - momRed) / scale;
-    zone += delta;
-
-    timeline.push({ time, zone: Number(zone.toFixed(3)), delta: Number(delta.toFixed(3)), stamB, stamR, compB, compR });
-
-    if (delta > 0){ stamB = clamp(stamB - exertB*1.10 + 0.002, 0.50, 1.25); stamR = clamp(stamR - exertR*0.90 + 0.000, 0.50, 1.25); }
-    else if (delta < 0){ stamB = clamp(stamB - exertB*0.90 + 0.000, 0.50, 1.25); stamR = clamp(stamR - exertR*1.10 + 0.002, 0.50, 1.25); }
-    else { stamB = clamp(stamB - exertB*0.98 + 0.001, 0.50, 1.25); stamR = clamp(stamR - exertR*0.98 + 0.001, 0.50, 1.25); }
-
-    const pressure = Math.sign(delta);
-    compB = clamp(compB + (pressure>0? +0.006 : -0.005) + (zone>0? +0.001 : -0.001), 0.70, 1.30);
-    compR = clamp(compR + (pressure<0? +0.006 : -0.005) + (zone<0? +0.001 : -0.001), 0.70, 1.30);
-
-    if (t === 0) lines.push(pick(pools.start, rng));
-    const mag = Math.abs(delta);
-    const tag = mag > 0.75 ? "HUGE SWING" : mag > 0.45 ? "BIG SWING" : mag > 0.20 ? "shift" : "tap";
-    const who = delta>0 ? "Stormfront" : (delta<0 ? "Fire Ferrets" : "Neutral");
-    lines.push(`${String(time).padStart(3," ")}s: ${who} ${tag} Δ${fmt(delta)} | zone:${fmt(zone)} | STM(B/R) ${stamB.toFixed(2)}/${stamR.toFixed(2)} | CMP(B/R) ${compB.toFixed(2)}/${compR.toFixed(2)}`);
-    if (mag > 0.6) lines.push( stamp(time, delta>0 ? pick(pools.swingBlue, rng) : pick(pools.swingRed, rng)) );
-    if (Math.abs(zone) > 1.0 && (t % 3 === 0)) lines.push( stamp(time, zone>0 ? pick(pools.flipBlue, rng) : pick(pools.flipRed, rng)) );
-    if (t === Math.floor(ticks/2)) lines.push( stamp(time, pick(pools.fatigue, rng)) );
-    if (ticks - t === 3) lines.push( stamp(time, pick(pools.clutch, rng)) );
-  }
-
-  const winner = zone > 0.10 ? "Stormfront Arcs (Blue)"
-               : zone < -0.10 ? "Fire Ferrets (Red)"
-               : "Draw";
-
-  return { winner, zone: Number(zone.toFixed(2)), timeline, lines,
-           endFactors: { stamB, stamR, compB, compR } };
-}
-
-/* ========= Graph ========= */
-const graph = $("#graph"); const ctx = graph.getContext("2d");
-function drawGraph(tl){
-  if (!ctx) return;
-  const dpr = window.devicePixelRatio || 1;
-  const cssW = graph.clientWidth, cssH = graph.clientHeight;
-  if (graph.width !== cssW*dpr || graph.height !== cssH*dpr){ graph.width = cssW*dpr; graph.height = cssH*dpr; }
-  ctx.save(); ctx.scale(dpr,dpr);
-  const W = cssW, H = cssH; ctx.clearRect(0,0,W,H);
-  ctx.fillStyle = "#f7fafc"; ctx.fillRect(0,0,W,H);
-  const midY = H/2; ctx.strokeStyle = "#cbd5e0"; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(0, midY); ctx.lineTo(W, midY); ctx.stroke();
-  if (!tl || !tl.length){ ctx.restore(); return; }
-  let minZ = 0, maxZ = 0; tl.forEach(p => { if (p.zone < minZ) minZ = p.zone; if (p.zone > maxZ) maxZ = p.zone; });
-  const pad = 0.4; minZ -= pad; maxZ += pad; if (maxZ - minZ < 1e-6){ maxZ = minZ + 1; }
-  const xStep = W / Math.max(1, (tl.length - 1)); const yScale = (H - 16) / (maxZ - minZ); const yOf = z => H - ((z - minZ) * yScale);
-  for (let i=1;i<tl.length;i++){
-    const a = tl[i-1], b = tl[i]; const x1 = (i-1)*xStep, x2 = i*xStep; const y1 = yOf(a.zone), y2 = yOf(b.zone);
-    const sign = (a.zone + b.zone)/2 >= 0 ? "blue" : "red"; ctx.strokeStyle = sign === "blue" ? "#2b6cb0" : "#c53030"; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
-  }
-  const last = tl[tl.length-1]; ctx.fillStyle = last.zone >= 0 ? "#2b6cb0" : "#c53030"; ctx.beginPath(); ctx.arc((tl.length-1)*xStep, yOf(last.zone), 4, 0, Math.PI*2); ctx.fill();
-  ctx.fillStyle = "#4a5568"; ctx.font = "12px system-ui, -apple-system, Segoe UI, Roboto, Arial"; ctx.fillText(`max ${maxZ.toFixed(1)}`, 8, 12); ctx.fillText(`0`, 8, midY-4); ctx.fillText(`min ${minZ.toFixed(1)}`, 8, H-6);
-  ctx.restore();
-}
-
-/* ========= Round Summary / MVP ========= */
-function summarizeRound(out){
-  const tl = out.timeline;
-  const total = tl.length;
-  const blueTicks = tl.filter(p => p.zone > 0).length;
-  const redTicks  = tl.filter(p => p.zone < 0).length;
-  const bluePct = Math.round(100 * blueTicks / total);
-  const redPct  = Math.round(100 * redTicks / total);
-
-  let maxSwing = {i:0, d:0};
-  tl.forEach((p,i)=>{ const ad = Math.abs(p.delta); if (ad > Math.abs(maxSwing.d)) maxSwing = {i, d:p.delta}; });
-  const ms = maxSwing;
-  const swing = tl[ms.i];
-  const swingBefore = tl[Math.max(0, ms.i-1)];
-  const swingAfter  = tl[Math.min(tl.length-1, ms.i+1)];
-  const swingTeam = ms.d > 0 ? "Stormfront (Blue)" : "Fire Ferrets (Red)";
-
-  let winText = "Draw on time at midfield.";
-  if (out.winner.includes("Blue")){
-    winText = `Stormfront by zone advantage (final zone ${out.zone > 0 ? "+" : ""}${out.zone}).`;
-  } else if (out.winner.includes("Red")){
-    winText = `Fire Ferrets by zone advantage (final zone ${out.zone}).`;
-  }
-
-  function playerScores(team, avgSTM, avgCMP){
-    return team.map(p => {
-      const off = (p.STR + p.PRC + p.INI + p.RHY)/4;
-      const def = (p.GST + p.AWR + p.CMP + p.POS)/4;
-      const score = off * (0.6 + 0.4*avgSTM) + def * (0.4 + 0.6*avgCMP);
-      return { name: p.name, off, def, score: Math.round(score) };
-    }).sort((a,b)=>b.score-a.score);
-  }
-  const avgSTMblue = avg(tl.map(x=>x.stamB));
-  const avgSTMred  = avg(tl.map(x=>x.stamR));
-  const avgCMPblue = avg(tl.map(x=>x.compB));
-  const avgCMPred  = avg(tl.map(x=>x.compR));
-  let mvpList, mvpTeam;
-  if (out.winner.includes("Blue")){ mvpList = playerScores(blue, avgSTMblue, avgCMPblue); mvpTeam="Stormfront"; }
-  else if (out.winner.includes("Red")){ mvpList = playerScores(red, avgSTMred, avgCMPred); mvpTeam="Fire Ferrets"; }
-  else { const a = playerScores(blue, avgSTMblue, avgCMPblue)[0]; const b = playerScores(red, avgSTMred, avgCMPred)[0]; mvpList = [a,b]; mvpTeam = Math.abs(out.zone) < 0.05 ? "Tie" : (out.zone>0?"Stormfront":"Fire Ferrets"); }
-  const mvp = mvpList[0];
-
-  const playDetail = `${swing.time}s — ${swingTeam} unleashed the biggest swing Δ${fmt(swing.delta)}: zone ${fmt(swingBefore.zone)} → ${fmt(swing.zone)} → ${fmt(swingAfter.zone)}. 
-Momentum spiked while STM(B/R) ${swing.stamB.toFixed(2)}/${swing.stamR.toFixed(2)} and CMP(B/R) ${swing.compB.toFixed(2)}/${swing.compR.toFixed(2)}—a tempo break that defined the round.`;
-
-  return `Win Condition: ${winText}
-Zone Control: Blue ${bluePct}%  |  Red ${redPct}%
-Max Swing: ${swing.time}s  Δ${fmt(swing.delta)}  (toward ${swingTeam})
-Play of the Round:
-  ${playDetail}
-
-MVP: ${mvp.name}  (${mvpTeam})  — Off ${Math.round(mvp.off)}/100, Def ${Math.round(mvp.def)}/100, Impact ${mvp.score}`;
-}
-
-/* ========= Between-Round Recovery ========= */
-function applyBetweenRoundRecovery(endFactors){
-  const avgENDblue = avg(blue.map(p=>p.END));
-  const avgENDred  = avg(red.map(p=>p.END));
-  const recB = 0.04 + (avgENDblue/100)*0.06;
-  const recR = 0.04 + (avgENDred/100)*0.06;
-
-  matchState.stamB = clamp(endFactors.stamB + recB, 0.60, 1.10);
-  matchState.stamR = clamp(endFactors.stamR + recR, 0.60, 1.10);
-
-  const relax = 0.08;
-  matchState.compB = clamp(endFactors.compB + (1.0 - endFactors.compB)*relax, 0.75, 1.15);
-  matchState.compR = clamp(endFactors.compR + (1.0 - endFactors.compR)*relax, 0.75, 1.15);
-}
-
-/* ========= Boot after data fetch ========= */
-(async function boot(){
-  const bootStatus = $("#bootStatus");
-  try{
-    BASE = await loadRosters();
-    blueBase = teamFromIds(BASE, BASE.teams.Stormfront);
-    redBase  = teamFromIds(BASE, BASE.teams.FireFerrets);
-    blue = JSON.parse(JSON.stringify(blueBase));
-    red  = JSON.parse(JSON.stringify(redBase));
-    renderRosters();
-    bootStatus.textContent = "Rosters loaded.";
-    // enable buttons
-    $("#runBtn").disabled = false;
-    $("#resetMatchBtn").disabled = false;
-    $("#selfTestBtn").disabled = false;
-    // init ticks display
-    const dtInit = parseInt($("#dt").value||"5",10);
-    $("#ticksAuto").textContent = String(Math.max(1, Math.floor(180/dtInit)));
-  } catch (e){
-    bootStatus.textContent = "Load error: " + e.message;
-    $("#result").textContent = "Data load error. Ensure /data/rosters.json exists and GitHub Pages is deployed.";
-  }
-})();
-
-/* ========= UI wiring ========= */
-const varianceEl = $("#variance"), varianceValEl = $("#varianceVal");
-varianceEl.addEventListener("input", () => { varianceValEl.textContent = varianceEl.value; });
-$("#dt").addEventListener("input", () => {
-  const dt = parseInt($("#dt").value||"5",10);
-  $("#ticksAuto").textContent = String(Math.max(1, Math.floor(180/dt)));
-});
-
-/* ========= Buttons ========= */
-$("#selfTestBtn").addEventListener("click", () => {
-  $("#result").textContent = "Self-test OK: script loaded, rosters " + (BASE ? "present" : "missing");
-});
-
-$("#runBtn").addEventListener("click", () => {
-  try{
-    if (matchState.locked) return;
-
-    // Element validation
-    const vBlue = validateTeamElements(blue);
-    const vRed  = validateTeamElements(red);
-    const aBlue = validateAllowedElements(blue);
-    const aRed  = validateAllowedElements(red);
-    if (!vBlue.ok || !vRed.ok || !aBlue.ok || !aRed.ok){
-      const msg1 = [elementRuleMessage("Blue", vBlue), elementRuleMessage("Red", vRed)].filter(Boolean).join("\n");
-      const msg2 = (!aBlue.ok || !aRed.ok)
-        ? [
-            aBlue.bad.length ? `Blue: illegal elements: ${aBlue.bad.map(p=>`${p.name}(${p.el})`).join(", ")}` : "",
-            aRed.bad.length  ? `Red: illegal elements: ${aRed.bad.map(p=>`${p.name}(${p.el})`).join(", ")}`   : ""
-          ].filter(Boolean).join("\n") + "\n(Allowed: " + Array.from(ALLOWED_ELEMENTS).join(", ") + ")"
-        : "";
-      $("#result").textContent = "Cannot run round:\n" + [msg1,msg2].filter(Boolean).join("\n");
-      return;
-    }
-
-    const seed  = $("#seed").value.trim() || "seed";
-    const dt    = parseInt($("#dt").value, 10) || 5;
-    const scale = parseInt($("#scale").value, 10) || 60;
-    const variancePct = parseInt($("#variance").value, 10) || 0;
-
-    $("#runBtn").disabled = true;
-    $("#nextBtn").disabled = true;
-
-    matchState.rngSeed = seed;
-    const out = simulateRound({ seed, dt, scale, variancePct });
-
-    const head =
-`=== Round ${matchState.round} Result ===
-Winner: ${out.winner}
-Final zone position (blue+=adv): ${out.zone}`;
-    $("#result").textContent = head;
-
-    $("#timeline").textContent = out.timeline.map(x => `${String(x.time).padStart(3," ")}s   zone:${x.zone >= 0 ? "+" : ""}${x.zone}`).join("\n");
-    drawGraph(out.timeline);
-
-    const container = $("#log");
-    container.textContent = "";
-    const lines = out.lines.length ? out.lines : ["— (Quiet round — increase variance or change stats)"];
-    const finish = () => { $("#nextBtn").disabled = false; $("#runBtn").disabled = false; };
-
-    if (!$("#slow").checked){
-      container.textContent = lines.map(s => "- " + s).join("\n");
-      finish();
-    } else {
-      const ms = clamp(parseInt($("#cadence").value||"280",10), 30, 4000);
-      let i = 0;
-      const timer = setInterval(() => {
-        container.textContent += (i===0?"":"\n") + "- " + lines[i];
-        i++;
-        if (i >= lines.length){ clearInterval(timer); finish(); }
-      }, ms);
-    }
-
-    const summary = summarizeRound(out);
-    $("#summary").textContent = summary;
-
-    matchState.lastWinner = out.winner;
-    matchState.lastTimeline = out.timeline;
-    applyBetweenRoundRecovery(out.endFactors);
-    matchState.locked = true;
-  } catch (e){
-    $("#result").textContent = "Error: " + (e && e.message ? e.message : String(e));
-    $("#runBtn").disabled = false;
-  }
-});
-
-$("#nextBtn").addEventListener("click", () => {
-  matchState.round += 1;
-  $("#roundNo").textContent = String(matchState.round);
-  matchState.locked = false;
-  $("#runBtn").disabled = false;
-  $("#nextBtn").disabled = true;
-  const note = `— Between-round recovery applied. New baselines → STM(B/R): ${matchState.stamB.toFixed(2)}/${matchState.stamR.toFixed(2)}, CMP(B/R): ${matchState.compB.toFixed(2)}/${matchState.compR.toFixed(2)}.`;
-  $("#log").textContent += ("\n" + note);
-});
-
-$("#resetMatchBtn").addEventListener("click", () => {
-  // full reset: teams back to base, match state cleared
-  blue = JSON.parse(JSON.stringify(blueBase));
-  red  = JSON.parse(JSON.stringify(redBase));
-  renderRosters();
-  matchState.round = 1;
-  matchState.stamB = matchState.stamR = matchState.compB = matchState.compR = null;
-  matchState.lastTimeline = []; matchState.lastWinner = null; matchState.locked = false;
-  $("#roundNo").textContent = "1";
-  $("#result").textContent = "—";
-  $("#log").textContent = "—";
-  $("#summary").textContent = "—";
-  $("#timeline").textContent = "—";
-  drawGraph([]);
-  $("#runBtn").disabled = false;
-  $("#nextBtn").disabled = true;
-});
-
-/* ===== Modal ===== */
-const openBtn = $("#openGuide");
-const closeBtn = $("#closeGuide");
-const closeBtn2 = $("#closeGuide2");
-const backdrop = $("#statsGuideBackdrop");
-const dialog = $("#statsGuide");
-let lastFocus = null;
-function openModal(){ lastFocus = document.activeElement; backdrop.style.display = "flex"; backdrop.setAttribute("aria-hidden","false"); dialog.focus(); }
-function closeModal(){ backdrop.style.display = "none"; backdrop.setAttribute("aria-hidden","true"); if (lastFocus) lastFocus.focus(); }
-openBtn.addEventListener("click", openModal);
-closeBtn.addEventListener("click", closeModal);
-closeBtn2?.addEventListener("click", closeModal);
-backdrop.addEventListener("click", (e)=>{ if(e.target === backdrop) closeModal(); });
-window.addEventListener("keydown", (e)=>{ if(e.key === "Escape" && backdrop.style.display==="flex") closeModal(); });
-
-</script>
+  <script type="module" src="./src/main.js"></script>
 </body>
 </html>
