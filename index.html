@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Pro-Bending Manager — 3-Min Rounds + Summaries + Match Flow</title>
+<title>Pro-Bending Manager — 3-Min Rounds + Summaries + Match Flow (Fix)</title>
 <style>
   :root { font-family: system-ui, Segoe UI, Roboto, Arial, sans-serif; }
   body { margin: 24px; line-height: 1.45; }
@@ -20,20 +20,11 @@
   .pill { padding: 2px 8px; border-radius:999px; background:#111; color:#fff; font-size:.8rem; }
   .flex { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
 
-  /* Graph */
   .graph-wrap { position: relative; }
   canvas { width: 100%; height: 220px; border-radius: 8px; border: 1px solid #eee; background: #fff; }
 
-  /* Modal (Stats Guide) */
-  .modal-backdrop {
-    position: fixed; inset: 0; background: rgba(0,0,0,.5);
-    display: none; align-items: center; justify-content: center; z-index: 1000;
-  }
-  .modal {
-    background: #fff; color:#111; width:min(800px, 92vw); max-height: 85vh;
-    border-radius:12px; box-shadow: 0 20px 50px rgba(0,0,0,.35);
-    overflow: hidden; display:flex; flex-direction:column;
-  }
+  .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: none; align-items: center; justify-content: center; z-index: 1000; }
+  .modal { background: #fff; color:#111; width:min(800px, 92vw); max-height: 85vh; border-radius:12px; box-shadow: 0 20px 50px rgba(0,0,0,.35); overflow: hidden; display:flex; flex-direction:column; }
   .modal header{ padding:14px 16px; border-bottom:1px solid #eee; display:flex; align-items:center; justify-content:space-between }
   .modal header h3{ margin:0; font-size:1.05rem }
   .modal .content{ padding:14px 16px; overflow:auto }
@@ -51,7 +42,7 @@
   </p>
 
   <div class="row">
-    <div class="card" style="max-width: 640px;">
+    <div class="card" style="max-width: 700px;">
       <h2 style="font-size:1.05rem;margin:0 0 8px;">Controls</h2>
       <div class="flex">
         <label>Seed <input id="seed" type="text" value="stormfront42" class="mono" style="width:140px;"></label>
@@ -73,6 +64,7 @@
         <button id="runBtn">Run Round <span class="muted">(Round <span id="roundNo">1</span>)</span></button>
         <button id="nextBtn" disabled>Next Round</button>
         <button id="resetMatchBtn" class="icon-btn">Reset Match</button>
+        <button id="selfTestBtn" class="icon-btn" title="Sanity check">Quick Self-Test</button>
         <span class="muted">Round length fixed: <b>180s</b></span>
       </div>
     </div>
@@ -110,6 +102,12 @@
   <div class="card" style="margin-top:16px;">
     <h2 style="font-size:1.05rem;margin:0 0 8px;">Round Summary</h2>
     <pre id="summary">—</pre>
+  </div>
+
+  <!-- A real timeline box (was missing in one version) -->
+  <div class="card" style="margin-top:16px;">
+    <h2 style="font-size:1.05rem;margin:0 0 8px;">Timeline (text)</h2>
+    <pre id="timeline" class="mono">—</pre>
   </div>
 
   <!-- ===== Modal: Stats Guide ===== -->
@@ -167,11 +165,10 @@ let redBase  = JSON.parse(JSON.stringify(DEFAULT_RED));
 let blue = JSON.parse(JSON.stringify(DEFAULT_BLUE));
 let red  = JSON.parse(JSON.stringify(DEFAULT_RED));
 
-/* ========= Match State (persists across rounds) ========= */
+/* ========= Match State ========= */
 const matchState = {
   round: 1,
   rngSeed: "stormfront42",
-  // team-level effective factors (stamina/composure multipliers)
   stamB: null, stamR: null, compB: null, compR: null,
   lastTimeline: [],
   lastWinner: null,
@@ -198,24 +195,16 @@ function renderRosters(){
 }
 
 /* ========= Factors ========= */
-function teamBaseStaminaFromRoster(team){
-  const s = avg(team.map(p => p.STM));
-  return 0.85 + (s/100)*0.30; // 0.85–1.15
-}
-function teamBaseComposureFromRoster(team){
-  const c = avg(team.map(p => p.CMP));
-  return 0.85 + (c/100)*0.30; // 0.85–1.15
-}
+function teamBaseStaminaFromRoster(team){ const s = avg(team.map(p => p.STM)); return 0.85 + (s/100)*0.30; }
+function teamBaseComposureFromRoster(team){ const c = avg(team.map(p => p.CMP)); return 0.85 + (c/100)*0.30; }
 
 /* ========= Off/Def ========= */
 function teamOffense(players, stam, comp){
-  const vals = [];
-  players.forEach(p => vals.push(p.STR, p.PRC, p.INI, p.RHY));
+  const vals = []; players.forEach(p => vals.push(p.STR, p.PRC, p.INI, p.RHY));
   return avg(vals) * stam * (0.6 + 0.4*comp);
 }
 function teamDefense(players, stam, comp){
-  const vals = [];
-  players.forEach(p => vals.push(p.GST, p.AWR, p.CMP, p.POS));
+  const vals = []; players.forEach(p => vals.push(p.GST, p.AWR, p.CMP, p.POS));
   return avg(vals) * (0.5 + 0.5*stam) * (0.7 + 0.3*comp);
 }
 
@@ -263,17 +252,15 @@ function stamp(t, s){ return `${String(t).padStart(3," ")}s: ${s}` }
 /* ========= Simulation (180s strict) ========= */
 function simulateRound({seed, dt, scale, variancePct}){
   const rng = mulberry32(seed || "default-seed");
-
-  const ticks = Math.max(1, Math.floor(180 / dt)); // fixed 3:00
+  const ticks = Math.max(1, Math.floor(180 / dt));
   $("#ticksAuto").textContent = String(ticks);
 
-  // team multipliers carry over between rounds or start from roster
   let stamB = matchState.stamB ?? teamBaseStaminaFromRoster(blue);
   let stamR = matchState.stamR ?? teamBaseStaminaFromRoster(red);
   let compB = matchState.compB ?? teamBaseComposureFromRoster(blue);
   let compR = matchState.compR ?? teamBaseComposureFromRoster(red);
 
-  let zone = 0; // + blue, - red
+  let zone = 0;
   const timeline = [];
   const lines = [];
 
@@ -297,24 +284,14 @@ function simulateRound({seed, dt, scale, variancePct}){
 
     timeline.push({ time, zone: Number(zone.toFixed(3)), delta: Number(delta.toFixed(3)), stamB, stamR, compB, compR });
 
-    // stamina drains (winner spends more)
-    if (delta > 0){
-      stamB = clamp(stamB - exertB*1.10 + 0.002, 0.50, 1.25);
-      stamR = clamp(stamR - exertR*0.90 + 0.000, 0.50, 1.25);
-    } else if (delta < 0){
-      stamB = clamp(stamB - exertB*0.90 + 0.000, 0.50, 1.25);
-      stamR = clamp(stamR - exertR*1.10 + 0.002, 0.50, 1.25);
-    } else {
-      stamB = clamp(stamB - exertB*0.98 + 0.001, 0.50, 1.25);
-      stamR = clamp(stamR - exertR*0.98 + 0.001, 0.50, 1.25);
-    }
+    if (delta > 0){ stamB = clamp(stamB - exertB*1.10 + 0.002, 0.50, 1.25); stamR = clamp(stamR - exertR*0.90 + 0.000, 0.50, 1.25); }
+    else if (delta < 0){ stamB = clamp(stamB - exertB*0.90 + 0.000, 0.50, 1.25); stamR = clamp(stamR - exertR*1.10 + 0.002, 0.50, 1.25); }
+    else { stamB = clamp(stamB - exertB*0.98 + 0.001, 0.50, 1.25); stamR = clamp(stamR - exertR*0.98 + 0.001, 0.50, 1.25); }
 
-    // composure reacts to swing & current control
     const pressure = Math.sign(delta);
     compB = clamp(compB + (pressure>0? +0.006 : -0.005) + (zone>0? +0.001 : -0.001), 0.70, 1.30);
     compR = clamp(compR + (pressure<0? +0.006 : -0.005) + (zone<0? +0.001 : -0.001), 0.70, 1.30);
 
-    // commentary: detailed telemetry + flavor
     if (t === 0) lines.push(pick(pools.start, rng));
     const mag = Math.abs(delta);
     const tag = mag > 0.75 ? "HUGE SWING" : mag > 0.45 ? "BIG SWING" : mag > 0.20 ? "shift" : "tap";
@@ -330,24 +307,19 @@ function simulateRound({seed, dt, scale, variancePct}){
                : zone < -0.10 ? "Fire Ferrets (Red)"
                : "Draw";
 
-  return {
-    winner,
-    zone: Number(zone.toFixed(2)),
-    timeline,
-    lines,
-    endFactors: { stamB, stamR, compB, compR }
-  };
+  return { winner, zone: Number(zone.toFixed(2)), timeline, lines,
+           endFactors: { stamB, stamR, compB, compR } };
 }
 
 /* ========= Graph ========= */
 const graph = $("#graph"); const ctx = graph.getContext("2d");
 function drawGraph(tl){
+  if (!ctx) return; // safety
   const dpr = window.devicePixelRatio || 1;
   const cssW = graph.clientWidth, cssH = graph.clientHeight;
   if (graph.width !== cssW*dpr || graph.height !== cssH*dpr){ graph.width = cssW*dpr; graph.height = cssH*dpr; }
   ctx.save(); ctx.scale(dpr,dpr);
   const W = cssW, H = cssH; ctx.clearRect(0,0,W,H);
-  // bg + zero
   ctx.fillStyle = "#f7fafc"; ctx.fillRect(0,0,W,H);
   const midY = H/2; ctx.strokeStyle = "#cbd5e0"; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(0, midY); ctx.lineTo(W, midY); ctx.stroke();
   if (!tl || !tl.length){ ctx.restore(); return; }
@@ -363,7 +335,7 @@ function drawGraph(tl){
   ctx.restore();
 }
 
-/* ========= Round Summary (how, play, MVP) ========= */
+/* ========= Round Summary ========= */
 function summarizeRound(out){
   const tl = out.timeline;
   const total = tl.length;
@@ -372,7 +344,6 @@ function summarizeRound(out){
   const bluePct = Math.round(100 * blueTicks / total);
   const redPct  = Math.round(100 * redTicks / total);
 
-  // Max swing (biggest |delta|)
   let maxSwing = {i:0, d:0};
   tl.forEach((p,i)=>{ const ad = Math.abs(p.delta); if (ad > Math.abs(maxSwing.d)) maxSwing = {i, d:p.delta}; });
   const ms = maxSwing;
@@ -381,7 +352,6 @@ function summarizeRound(out){
   const swingAfter  = tl[Math.min(tl.length-1, ms.i+1)];
   const swingTeam = ms.d > 0 ? "Stormfront (Blue)" : "Fire Ferrets (Red)";
 
-  // Win condition text
   let winText = "Draw on time at midfield.";
   if (out.winner.includes("Blue")){
     winText = `Stormfront by zone advantage (final zone ${out.zone > 0 ? "+" : ""}${out.zone}).`;
@@ -389,9 +359,6 @@ function summarizeRound(out){
     winText = `Fire Ferrets by zone advantage (final zone ${out.zone}).`;
   }
 
-  // MVP heuristic (fun, simple):
-  // OffenseScore = avg(STR,PRC,INI,RHY); DefenseScore = avg(GST,AWR,CMP,POS).
-  // If Blue wins, pick blue player with best (OffScore * avg STM + DefScore * avg CMP weight).
   function playerScores(team, avgSTM, avgCMP){
     return team.map(p => {
       const off = (p.STR + p.PRC + p.INI + p.RHY)/4;
@@ -405,17 +372,150 @@ function summarizeRound(out){
   const avgCMPblue = avg(tl.map(x=>x.compB));
   const avgCMPred  = avg(tl.map(x=>x.compR));
   let mvpList, mvpTeam;
-  if (out.winner.includes("Blue")){
-    mvpList = playerScores(blue, avgSTMblue, avgCMPblue); mvpTeam="Stormfront";
-  } else if (out.winner.includes("Red")){
-    mvpList = playerScores(red,  avgSTMred,  avgCMPred ); mvpTeam="Fire Ferrets";
-  } else {
-    // Draw: pick top from both, then choose by whose side zone ended nearer
-    const a = playerScores(blue, avgSTMblue, avgCMPblue)[0];
-    const b = playerScores(red,  avgSTMred,  avgCMPred )[0];
-    mvpList = [a,b]; mvpTeam = Math.abs(out.zone) < 0.05 ? "Tie" : (out.zone>0?"Stormfront":"Fire Ferrets");
-  }
+  if (out.winner.includes("Blue")){ mvpList = playerScores(blue, avgSTMblue, avgCMPblue); mvpTeam="Stormfront"; }
+  else if (out.winner.includes("Red")){ mvpList = playerScores(red, avgSTMred, avgCMPred); mvpTeam="Fire Ferrets"; }
+  else { const a = playerScores(blue, avgSTMblue, avgCMPblue)[0]; const b = playerScores(red, avgSTMred, avgCMPred)[0]; mvpList = [a,b]; mvpTeam = Math.abs(out.zone) < 0.05 ? "Tie" : (out.zone>0?"Stormfront":"Fire Ferrets"); }
   const mvp = mvpList[0];
 
-  // Play of the Round narrative
-  const playDetail = `${swing.time}s — ${sw
+  const playDetail = `${swing.time}s — ${swingTeam} unleashed the biggest swing Δ${fmt(swing.delta)}: zone ${fmt(swingBefore.zone)} → ${fmt(swing.zone)} → ${fmt(swingAfter.zone)}. 
+Momentum spiked while STM(B/R) ${swing.stamB.toFixed(2)}/${swing.stamR.toFixed(2)} and CMP(B/R) ${swing.compB.toFixed(2)}/${swing.compR.toFixed(2)}—a tempo break that defined the round.`;
+
+  return `Win Condition: ${winText}
+Zone Control: Blue ${bluePct}%  |  Red ${redPct}%
+Max Swing: ${swing.time}s  Δ${fmt(swing.delta)}  (toward ${swingTeam})
+Play of the Round:
+  ${playDetail}
+
+MVP: ${mvp.name}  (${mvpTeam})  — Off ${Math.round(mvp.off)}/100, Def ${Math.round(mvp.def)}/100, Impact ${mvp.score}`;
+}
+
+/* ========= Between-Round Recovery ========= */
+function applyBetweenRoundRecovery(endFactors){
+  const avgENDblue = avg(blue.map(p=>p.END));
+  const avgENDred  = avg(red.map(p=>p.END));
+  const recB = 0.04 + (avgENDblue/100)*0.06;
+  const recR = 0.04 + (avgENDred/100)*0.06;
+
+  matchState.stamB = clamp(endFactors.stamB + recB, 0.60, 1.10);
+  matchState.stamR = clamp(endFactors.stamR + recR, 0.60, 1.10);
+
+  const relax = 0.08;
+  matchState.compB = clamp(endFactors.compB + (1.0 - endFactors.compB)*relax, 0.75, 1.15);
+  matchState.compR = clamp(endFactors.compR + (1.0 - endFactors.compR)*relax, 0.75, 1.15);
+}
+
+/* ========= UI state ========= */
+renderRosters();
+const seedEl = $("#seed"), dtEl = $("#dt"), scaleEl = $("#scale");
+const varianceEl = $("#variance"), varianceValEl = $("#varianceVal");
+const slowEl = $("#slow"), cadenceEl = $("#cadence");
+const roundNoEl = $("#roundNo"); const ticksAutoEl = $("#ticksAuto");
+varianceEl.addEventListener("input", () => { varianceValEl.textContent = varianceEl.value; });
+function updateTicksAuto(){ const dt = parseInt(dtEl.value||"5",10); ticksAutoEl.textContent = String(Math.max(1, Math.floor(180/dt))); }
+dtEl.addEventListener("input", updateTicksAuto); updateTicksAuto();
+
+/* ========= Buttons ========= */
+$("#selfTestBtn").addEventListener("click", () => {
+  $("#result").textContent = "Self-test OK: script loaded, UI wired, ready to run.";
+});
+
+$("#runBtn").addEventListener("click", () => {
+  try {
+    if (matchState.locked) return;
+    const seed  = seedEl.value.trim() || "seed";
+    const dt    = parseInt(dtEl.value, 10) || 5;
+    const scale = parseInt(scaleEl.value, 10) || 60;
+    const variancePct = parseInt(varianceEl.value, 10) || 0;
+
+    $("#runBtn").disabled = true;
+    $("#nextBtn").disabled = true;
+
+    matchState.rngSeed = seed;
+    const out = simulateRound({ seed, dt, scale, variancePct });
+
+    const head =
+`=== Round ${matchState.round} Result ===
+Winner: ${out.winner}
+Final zone position (blue+=adv): ${out.zone}`;
+    $("#result").textContent = head;
+
+    const tlText = out.timeline.map(x => `${String(x.time).padStart(3," ")}s   zone:${x.zone >= 0 ? "+" : ""}${x.zone}`).join("\n");
+    $("#timeline").textContent = tlText;
+
+    drawGraph(out.timeline);
+
+    const container = $("#log");
+    container.textContent = "";
+    const lines = out.lines.length ? out.lines : ["— (Quiet round — increase variance or change stats)"];
+    const finish = () => { $("#nextBtn").disabled = false; $("#runBtn").disabled = false; };
+
+    if (!slowEl.checked){
+      container.textContent = lines.map(s => "- " + s).join("\n");
+      finish();
+    } else {
+      const ms = clamp(parseInt(cadenceEl.value||"280",10), 30, 4000);
+      let i = 0;
+      const timer = setInterval(() => {
+        container.textContent += (i===0?"":"\n") + "- " + lines[i];
+        i++;
+        if (i >= lines.length){ clearInterval(timer); finish(); }
+      }, ms);
+    }
+
+    const summary = summarizeRound(out);
+    $("#summary").textContent = summary;
+
+    matchState.lastWinner = out.winner;
+    matchState.lastTimeline = out.timeline;
+    applyBetweenRoundRecovery(out.endFactors);
+    matchState.locked = true;
+  } catch (e){
+    $("#result").textContent = "Error: " + (e && e.message ? e.message : String(e));
+    $("#runBtn").disabled = false;
+  }
+});
+
+$("#nextBtn").addEventListener("click", () => {
+  matchState.round += 1;
+  roundNoEl.textContent = String(matchState.round);
+  matchState.locked = false;
+  $("#runBtn").disabled = false;
+  $("#nextBtn").disabled = true;
+  const note = `— Between-round recovery applied. New baselines → STM(B/R): ${matchState.stamB.toFixed(2)}/${matchState.stamR.toFixed(2)}, CMP(B/R): ${matchState.compB.toFixed(2)}/${matchState.compR.toFixed(2)}.`;
+  $("#log").textContent += ("\n" + note);
+});
+
+$("#resetMatchBtn").addEventListener("click", () => {
+  blue = JSON.parse(JSON.stringify(blueBase));
+  red  = JSON.parse(JSON.stringify(redBase));
+  renderRosters();
+  matchState.round = 1;
+  matchState.stamB = matchState.stamR = matchState.compB = matchState.compR = null;
+  matchState.lastTimeline = []; matchState.lastWinner = null; matchState.locked = false;
+  $("#roundNo").textContent = "1";
+  $("#result").textContent = "—";
+  $("#log").textContent = "—";
+  $("#summary").textContent = "—";
+  $("#timeline").textContent = "—";
+  drawGraph([]);
+  $("#runBtn").disabled = false;
+  $("#nextBtn").disabled = true;
+});
+
+/* ===== Modal ===== */
+const openBtn = $("#openGuide");
+const closeBtn = $("#closeGuide");
+const closeBtn2 = $("#closeGuide2");
+const backdrop = $("#statsGuideBackdrop");
+const dialog = $("#statsGuide");
+let lastFocus = null;
+function openModal(){ lastFocus = document.activeElement; backdrop.style.display = "flex"; backdrop.setAttribute("aria-hidden","false"); dialog.focus(); }
+function closeModal(){ backdrop.style.display = "none"; backdrop.setAttribute("aria-hidden","true"); if (lastFocus) lastFocus.focus(); }
+openBtn.addEventListener("click", openModal);
+closeBtn.addEventListener("click", closeModal);
+closeBtn2?.addEventListener("click", closeModal);
+backdrop.addEventListener("click", (e)=>{ if(e.target === backdrop) closeModal(); });
+window.addEventListener("keydown", (e)=>{ if(e.key === "Escape" && backdrop.style.display==="flex") closeModal(); });
+</script>
+</body>
+</html>
