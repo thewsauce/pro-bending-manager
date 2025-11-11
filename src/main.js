@@ -1,4 +1,7 @@
 // src/main.js
+// App wiring: load rosters, pre-round variance, starter decision, run round,
+// render commentary/graph/summary, and handle recovery & team modal.
+
 import { loadRosters, teamFromIds, rosterText } from "./data.js";
 import {
   validateTeamElements,
@@ -11,16 +14,17 @@ import { summarizeRound } from "./summary.js";
 import { applyRoundVariance } from "./variance.js";
 import { mulberry32 } from "./util.js";
 import { setupTeamModal } from "./team_modal.js";
+import { firstMoverDecision } from "./start_order.js";
 
 const $ = (sel) => document.querySelector(sel);
 
 const state = {
   base: null,
-  blue: null,
+  blue: null,   // baseline (unbuffed) team objects
   red: null,
-  carry: null, // {stamB, stamR, compB, compR}
+  carry: null,  // {stamB, stamR, compB, compR}
   round: 1,
-  locked: false,
+  locked: false
 };
 
 function renderRosters() {
@@ -39,9 +43,10 @@ function updateTicks() {
     const base = await loadRosters();
     state.base = base;
 
-    // Default teams (adjust names if yours differ)
-    const blueIds = base.teams.Stormfront || Object.values(base.teams)[0];
-    const redIds  = base.teams.FireFerrets || Object.values(base.teams)[1];
+    // Pick defaults (adjust names to your JSON)
+    const names = Object.keys(base.teams);
+    const blueIds = base.teams[names[0]];
+    const redIds  = base.teams[names[1]];
 
     state.blue = teamFromIds(base, blueIds);
     state.red  = teamFromIds(base, redIds);
@@ -49,15 +54,14 @@ function updateTicks() {
     renderRosters();
     updateTicks();
 
-    // Init modal
+    // Team Manager modal wiring
     setupTeamModal(
       state.base,
-      () => ({ blueIds: state.blue.map(p=>p.id), redIds: state.red.map(p=>p.id) }),
+      () => ({ blueIds: state.blue.map(p => p.id), redIds: state.red.map(p => p.id) }),
       ({ blueIds, redIds }) => {
         state.blue = teamFromIds(state.base, blueIds);
         state.red  = teamFromIds(state.base, redIds);
-
-        // reset match state on team change
+        // Reset match state after changing teams
         state.carry = null;
         state.round = 1;
         state.locked = false;
@@ -85,8 +89,9 @@ $("#dt").addEventListener("input", updateTicks);
 
 $("#resetBtn").addEventListener("click", () => {
   const base = state.base;
-  const blueIds = base.teams.Stormfront || Object.values(base.teams)[0];
-  const redIds  = base.teams.FireFerrets || Object.values(base.teams)[1];
+  const names = Object.keys(base.teams);
+  const blueIds = base.teams[names[0]];
+  const redIds  = base.teams[names[1]];
 
   state.blue = teamFromIds(base, blueIds);
   state.red  = teamFromIds(base, redIds);
@@ -99,6 +104,7 @@ $("#resetBtn").addEventListener("click", () => {
   $("#summary").textContent = "—";
   $("#log").textContent = "—";
   drawGraph($("#graph"), []);
+
   renderRosters();
   $("#nextBtn").disabled = true;
   $("#runBtn").disabled = false;
@@ -107,7 +113,7 @@ $("#resetBtn").addEventListener("click", () => {
 $("#runBtn").addEventListener("click", () => {
   if (state.locked) return;
 
-  // Element rules
+  // Element rules guardrails
   const vBlue = validateTeamElements(state.blue);
   const vRed  = validateTeamElements(state.red);
   const aBlue = validateAllowedElements(state.blue);
@@ -131,38 +137,51 @@ $("#runBtn").addEventListener("click", () => {
   $("#runBtn").disabled = true;
   $("#nextBtn").disabled = true;
 
-  // Pre-round variance (mood + element + play-styles)
+  // Pre-round variance (mood + element + play-styles) — applied only for this round
   const rngBlue = mulberry32(`${seed}:round${state.round}:blue`);
   const rngRed  = mulberry32(`${seed}:round${state.round}:red`);
   const { team: blueRound, notes: blueNotes } = applyRoundVariance(state.blue, rngBlue);
   const { team: redRound,  notes: redNotes  } = applyRoundVariance(state.red,  rngRed);
 
+  // Starter decision (post-buffs)
+  const rngStart = mulberry32(`${seed}:round${state.round}:starter`);
+  const starterInfo = firstMoverDecision(blueRound, redRound, rngStart);
+
+  // Preface with rolls + starter info
   const preface = [
     `— Round ${state.round} pre-buffs —`,
     ...blueNotes.map(s => `[Blue] ${s}`),
     ...redNotes.map(s  => `[Red ] ${s}`),
+    "",
+    `Starter: ${starterInfo.first}  (TB=${starterInfo.TB.toFixed(3)} vs TR=${starterInfo.TR.toFixed(3)})`,
     ""
   ].join("\n");
   $("#log").textContent = preface;
 
+  // Run the round with buffed teams and first-mover
   const out = simulateRound({
     seed, dt, scale, variancePct,
     blue: blueRound,
     red:  redRound,
-    carry: state.carry
+    carry: state.carry,
+    firstMover: starterInfo.first
   });
 
+  // Result text
   $("#result").textContent =
     `Round ${state.round} Winner: ${out.winner}\n` +
     `Final zone: ${(out.zone >= 0 ? "+" : "") + out.zone}`;
 
+  // Append commentary lines
   $("#log").textContent += out.lines.length
     ? out.lines.map(s => "- " + s).join("\n").replace(/^/m, "\n")
     : "\n— (Quiet round)";
 
+  // Graph + Summary
   drawGraph($("#graph"), out.timeline);
   $("#summary").textContent = summarizeRound(out, state.blue, state.red);
 
+  // Between-round baselines (recovery, uses unbuffed rosters for END/CMP effects)
   state.carry = recoverBetweenRounds(state.blue, state.red, out.endFactors);
 
   state.locked = true;
