@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Pro-Bending Manager — 3-Min Rounds + Summaries + Match Flow (Fix)</title>
+<title>Pro-Bending Manager — Match Sim (fetch rosters.json)</title>
 <style>
-  :root { font-family: system-ui, Segoe UI, Roboto, Arial, sans-serif; }
+  :root { font-family: system-ui, Segoe UI, Roboto, Arial, sans-serif; color-scheme: light dark; }
   body { margin: 24px; line-height: 1.45; }
   h1 { font-size: 1.25rem; margin: 0 0 8px; }
   .row { display: flex; gap: 16px; flex-wrap: wrap; }
@@ -37,7 +37,7 @@
 <body>
   <h1>Pro-Bending Manager — Text-Only Match Sim</h1>
   <p class="muted">
-    3-minute rounds • detailed summaries • MVP • between-round recovery • slow announcer • color timeline.
+    Fetches <code>/data/rosters.json</code> • 3-minute rounds • detailed summaries • MVP • between-round recovery • slow announcer • color timeline.
     <button id="openGuide" class="icon-btn" aria-haspopup="dialog" aria-controls="statsGuide">📘 Stats Guide</button>
   </p>
 
@@ -47,7 +47,7 @@
       <div class="flex">
         <label>Seed <input id="seed" type="text" value="stormfront42" class="mono" style="width:140px;"></label>
         <label>Δt (sec) <input id="dt" type="number" min="1" max="10" step="1" value="5" /></label>
-        <span class="muted">Ticks auto = <span id="ticksAuto">36</span> (fixed round 180s)</span>
+        <span class="muted">Ticks auto = <span id="ticksAuto">—</span> (fixed round 180s)</span>
         <label>Scale <input id="scale" type="number" min="20" max="200" step="5" value="60" /></label>
       </div>
       <div class="flex" style="margin-top:8px;">
@@ -61,12 +61,13 @@
         </label>
       </div>
       <div class="flex" style="margin-top:10px;">
-        <button id="runBtn">Run Round <span class="muted">(Round <span id="roundNo">1</span>)</span></button>
+        <button id="runBtn" disabled>Run Round <span class="muted">(Round <span id="roundNo">1</span>)</span></button>
         <button id="nextBtn" disabled>Next Round</button>
-        <button id="resetMatchBtn" class="icon-btn">Reset Match</button>
-        <button id="selfTestBtn" class="icon-btn" title="Sanity check">Quick Self-Test</button>
+        <button id="resetMatchBtn" class="icon-btn" disabled>Reset Match</button>
+        <button id="selfTestBtn" class="icon-btn" title="Sanity check" disabled>Quick Self-Test</button>
         <span class="muted">Round length fixed: <b>180s</b></span>
       </div>
+      <p class="muted" id="bootStatus">Loading rosters…</p>
     </div>
 
     <div class="card">
@@ -78,11 +79,11 @@
   <div class="row" style="margin-top:16px;">
     <div class="card">
       <h2 style="font-size:1.05rem;margin:0 0 8px;">Blue Team (Stormfront)</h2>
-      <pre id="blueRoster" class="mono"></pre>
+      <pre id="blueRoster" class="mono">—</pre>
     </div>
     <div class="card">
       <h2 style="font-size:1.05rem;margin:0 0 8px;">Red Team (Fire Ferrets)</h2>
-      <pre id="redRoster" class="mono"></pre>
+      <pre id="redRoster" class="mono">—</pre>
     </div>
   </div>
 
@@ -104,7 +105,6 @@
     <pre id="summary">—</pre>
   </div>
 
-  <!-- A real timeline box (was missing in one version) -->
   <div class="card" style="margin-top:16px;">
     <h2 style="font-size:1.05rem;margin:0 0 8px;">Timeline (text)</h2>
     <pre id="timeline" class="mono">—</pre>
@@ -148,22 +148,23 @@ function mulberry32(seedStr) {
   };
 }
 
-/* ========= Default Rosters ========= */
-const DEFAULT_BLUE = [
-  { name:"Cheri",   INI:88, STR:82, PRC:79, GST:74, AWR:80, RHY:83, CMP:74, POS:75, STM:76, END:72 },
-  { name:"Taelon",  INI:78, STR:86, PRC:90, GST:82, AWR:92, RHY:91, CMP:94, POS:92, STM:80, END:82 },
-  { name:"Dori",    INI:68, STR:80, PRC:82, GST:92, AWR:90, RHY:86, CMP:94, POS:91, STM:88, END:86 },
-];
-const DEFAULT_RED = [
-  { name:"Korra", INI:90, STR:94, PRC:78, GST:70, AWR:72, RHY:80, CMP:65, POS:74, STM:84, END:79 },
-  { name:"Mako",  INI:80, STR:76, PRC:88, GST:78, AWR:90, RHY:86, CMP:92, POS:90, STM:80, END:78 },
-  { name:"Bolin", INI:68, STR:82, PRC:74, GST:90, AWR:85, RHY:80, CMP:88, POS:88, STM:88, END:90 },
-];
+/* ========= Data loading (fetch rosters.json with local override) ========= */
+async function loadRosters() {
+  const local = localStorage.getItem("rosters.v1");
+  if (local) return JSON.parse(local);
+  const res = await fetch("./data/rosters.json?v=" + Date.now(), { cache: "no-store" });
+  if (!res.ok) throw new Error("Failed to load data/rosters.json");
+  return await res.json();
+}
+function saveRostersToLocal(updatedBase){
+  localStorage.setItem("rosters.v1", JSON.stringify(updatedBase));
+}
+function teamFromIds(base, ids){ return ids.map(id => ({ id, ...base.players[id] })); }
 
-let blueBase = JSON.parse(JSON.stringify(DEFAULT_BLUE));
-let redBase  = JSON.parse(JSON.stringify(DEFAULT_RED));
-let blue = JSON.parse(JSON.stringify(DEFAULT_BLUE));
-let red  = JSON.parse(JSON.stringify(DEFAULT_RED));
+/* ========= Globals built after data loads ========= */
+let BASE = null;
+let blueBase = null, redBase = null;
+let blue = null, red = null;
 
 /* ========= Match State ========= */
 const matchState = {
@@ -183,9 +184,13 @@ function avg(arr){ return arr.reduce((a,b)=>a+b,0)/arr.length; }
 
 function rosterText(team){
   const lines = team.map(p => {
-    const attrs = ["INI","STR","PRC","GST","AWR","RHY","CMP","POS","STM","END"].map(k => `${k}:${String(p[k]).padStart(2,' ')}`).join(" ");
-    const ovr = Math.round(["INI","STR","PRC","GST","AWR","RHY","CMP","POS"].reduce((a,k)=>a+p[k],0)/8);
-    return `${p.name.padEnd(10)} | OVR ~ ${String(ovr).padStart(2,' ')} | ${attrs}`;
+    const e = p.el ? p.el[0].toUpperCase() + p.el.slice(1) : "?";
+    const g = p.gender ? p.gender.toUpperCase() : "?";
+    const attrs = ["INI","STR","PRC","GST","AWR","RHY","CMP","POS","STM","END"]
+      .map(k => `${k}:${String(p[k]).padStart(2,' ')}`).join(" ");
+    const ovr = Math.round(["INI","STR","PRC","GST","AWR","RHY","CMP","POS"]
+      .reduce((a,k)=>a+p[k],0)/8);
+    return `${p.name.padEnd(10)} | ${e}/${g} | OVR ~ ${String(ovr).padStart(2,' ')} | ${attrs}`;
   });
   return lines.join("\n");
 }
@@ -206,6 +211,24 @@ function teamOffense(players, stam, comp){
 function teamDefense(players, stam, comp){
   const vals = []; players.forEach(p => vals.push(p.GST, p.AWR, p.CMP, p.POS));
   return avg(vals) * (0.5 + 0.5*stam) * (0.7 + 0.3*comp);
+}
+
+/* ========= Validators (elements) ========= */
+const ALLOWED_ELEMENTS = new Set(["water","earth","fire"]); // set to include "air" if you want
+function validateTeamElements(team){
+  const counts = {};
+  team.forEach(p => { const el = (p.el||"unknown").toLowerCase(); counts[el] = (counts[el]||0)+1; });
+  const dups = Object.entries(counts).filter(([el,c]) => c > 1).map(([el,c])=>({el,count:c}));
+  return { ok: dups.length === 0, dups };
+}
+function validateAllowedElements(team){
+  const bad = team.filter(p => !ALLOWED_ELEMENTS.has((p.el||"").toLowerCase()));
+  return { ok: bad.length === 0, bad };
+}
+function elementRuleMessage(teamName, res){
+  if (res.ok) return "";
+  const list = res.dups.map(d => `${d.el}×${d.count}`).join(", ");
+  return `${teamName}: invalid element composition — duplicates found (${list}). One bender per element only.`;
 }
 
 /* ========= Commentary Pools ========= */
@@ -314,7 +337,7 @@ function simulateRound({seed, dt, scale, variancePct}){
 /* ========= Graph ========= */
 const graph = $("#graph"); const ctx = graph.getContext("2d");
 function drawGraph(tl){
-  if (!ctx) return; // safety
+  if (!ctx) return;
   const dpr = window.devicePixelRatio || 1;
   const cssW = graph.clientWidth, cssH = graph.clientHeight;
   if (graph.width !== cssW*dpr || graph.height !== cssH*dpr){ graph.width = cssW*dpr; graph.height = cssH*dpr; }
@@ -335,7 +358,7 @@ function drawGraph(tl){
   ctx.restore();
 }
 
-/* ========= Round Summary ========= */
+/* ========= Round Summary / MVP ========= */
 function summarizeRound(out){
   const tl = out.timeline;
   const total = tl.length;
@@ -404,28 +427,68 @@ function applyBetweenRoundRecovery(endFactors){
   matchState.compR = clamp(endFactors.compR + (1.0 - endFactors.compR)*relax, 0.75, 1.15);
 }
 
-/* ========= UI state ========= */
-renderRosters();
-const seedEl = $("#seed"), dtEl = $("#dt"), scaleEl = $("#scale");
+/* ========= Boot after data fetch ========= */
+(async function boot(){
+  const bootStatus = $("#bootStatus");
+  try{
+    BASE = await loadRosters();
+    blueBase = teamFromIds(BASE, BASE.teams.Stormfront);
+    redBase  = teamFromIds(BASE, BASE.teams.FireFerrets);
+    blue = JSON.parse(JSON.stringify(blueBase));
+    red  = JSON.parse(JSON.stringify(redBase));
+    renderRosters();
+    bootStatus.textContent = "Rosters loaded.";
+    // enable buttons
+    $("#runBtn").disabled = false;
+    $("#resetMatchBtn").disabled = false;
+    $("#selfTestBtn").disabled = false;
+    // init ticks display
+    const dtInit = parseInt($("#dt").value||"5",10);
+    $("#ticksAuto").textContent = String(Math.max(1, Math.floor(180/dtInit)));
+  } catch (e){
+    bootStatus.textContent = "Load error: " + e.message;
+    $("#result").textContent = "Data load error. Ensure /data/rosters.json exists and GitHub Pages is deployed.";
+  }
+})();
+
+/* ========= UI wiring ========= */
 const varianceEl = $("#variance"), varianceValEl = $("#varianceVal");
-const slowEl = $("#slow"), cadenceEl = $("#cadence");
-const roundNoEl = $("#roundNo"); const ticksAutoEl = $("#ticksAuto");
 varianceEl.addEventListener("input", () => { varianceValEl.textContent = varianceEl.value; });
-function updateTicksAuto(){ const dt = parseInt(dtEl.value||"5",10); ticksAutoEl.textContent = String(Math.max(1, Math.floor(180/dt))); }
-dtEl.addEventListener("input", updateTicksAuto); updateTicksAuto();
+$("#dt").addEventListener("input", () => {
+  const dt = parseInt($("#dt").value||"5",10);
+  $("#ticksAuto").textContent = String(Math.max(1, Math.floor(180/dt)));
+});
 
 /* ========= Buttons ========= */
 $("#selfTestBtn").addEventListener("click", () => {
-  $("#result").textContent = "Self-test OK: script loaded, UI wired, ready to run.";
+  $("#result").textContent = "Self-test OK: script loaded, rosters " + (BASE ? "present" : "missing");
 });
 
 $("#runBtn").addEventListener("click", () => {
-  try {
+  try{
     if (matchState.locked) return;
-    const seed  = seedEl.value.trim() || "seed";
-    const dt    = parseInt(dtEl.value, 10) || 5;
-    const scale = parseInt(scaleEl.value, 10) || 60;
-    const variancePct = parseInt(varianceEl.value, 10) || 0;
+
+    // Element validation
+    const vBlue = validateTeamElements(blue);
+    const vRed  = validateTeamElements(red);
+    const aBlue = validateAllowedElements(blue);
+    const aRed  = validateAllowedElements(red);
+    if (!vBlue.ok || !vRed.ok || !aBlue.ok || !aRed.ok){
+      const msg1 = [elementRuleMessage("Blue", vBlue), elementRuleMessage("Red", vRed)].filter(Boolean).join("\n");
+      const msg2 = (!aBlue.ok || !aRed.ok)
+        ? [
+            aBlue.bad.length ? `Blue: illegal elements: ${aBlue.bad.map(p=>`${p.name}(${p.el})`).join(", ")}` : "",
+            aRed.bad.length  ? `Red: illegal elements: ${aRed.bad.map(p=>`${p.name}(${p.el})`).join(", ")}`   : ""
+          ].filter(Boolean).join("\n") + "\n(Allowed: " + Array.from(ALLOWED_ELEMENTS).join(", ") + ")"
+        : "";
+      $("#result").textContent = "Cannot run round:\n" + [msg1,msg2].filter(Boolean).join("\n");
+      return;
+    }
+
+    const seed  = $("#seed").value.trim() || "seed";
+    const dt    = parseInt($("#dt").value, 10) || 5;
+    const scale = parseInt($("#scale").value, 10) || 60;
+    const variancePct = parseInt($("#variance").value, 10) || 0;
 
     $("#runBtn").disabled = true;
     $("#nextBtn").disabled = true;
@@ -439,9 +502,7 @@ Winner: ${out.winner}
 Final zone position (blue+=adv): ${out.zone}`;
     $("#result").textContent = head;
 
-    const tlText = out.timeline.map(x => `${String(x.time).padStart(3," ")}s   zone:${x.zone >= 0 ? "+" : ""}${x.zone}`).join("\n");
-    $("#timeline").textContent = tlText;
-
+    $("#timeline").textContent = out.timeline.map(x => `${String(x.time).padStart(3," ")}s   zone:${x.zone >= 0 ? "+" : ""}${x.zone}`).join("\n");
     drawGraph(out.timeline);
 
     const container = $("#log");
@@ -449,11 +510,11 @@ Final zone position (blue+=adv): ${out.zone}`;
     const lines = out.lines.length ? out.lines : ["— (Quiet round — increase variance or change stats)"];
     const finish = () => { $("#nextBtn").disabled = false; $("#runBtn").disabled = false; };
 
-    if (!slowEl.checked){
+    if (!$("#slow").checked){
       container.textContent = lines.map(s => "- " + s).join("\n");
       finish();
     } else {
-      const ms = clamp(parseInt(cadenceEl.value||"280",10), 30, 4000);
+      const ms = clamp(parseInt($("#cadence").value||"280",10), 30, 4000);
       let i = 0;
       const timer = setInterval(() => {
         container.textContent += (i===0?"":"\n") + "- " + lines[i];
@@ -477,7 +538,7 @@ Final zone position (blue+=adv): ${out.zone}`;
 
 $("#nextBtn").addEventListener("click", () => {
   matchState.round += 1;
-  roundNoEl.textContent = String(matchState.round);
+  $("#roundNo").textContent = String(matchState.round);
   matchState.locked = false;
   $("#runBtn").disabled = false;
   $("#nextBtn").disabled = true;
@@ -486,6 +547,7 @@ $("#nextBtn").addEventListener("click", () => {
 });
 
 $("#resetMatchBtn").addEventListener("click", () => {
+  // full reset: teams back to base, match state cleared
   blue = JSON.parse(JSON.stringify(blueBase));
   red  = JSON.parse(JSON.stringify(redBase));
   renderRosters();
@@ -516,6 +578,7 @@ closeBtn.addEventListener("click", closeModal);
 closeBtn2?.addEventListener("click", closeModal);
 backdrop.addEventListener("click", (e)=>{ if(e.target === backdrop) closeModal(); });
 window.addEventListener("keydown", (e)=>{ if(e.key === "Escape" && backdrop.style.display==="flex") closeModal(); });
+
 </script>
 </body>
 </html>
