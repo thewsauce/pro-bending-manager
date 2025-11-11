@@ -80,5 +80,64 @@
   </div>
 
   <script type="module" src="./src/main.js"></script>
+
+  <!-- Modal (add near end of body) -->
+<style>
+  .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:center;justify-content:center;z-index:1000}
+  .modal{background:#fff;border-radius:12px;max-width:800px;width:95%;box-shadow:0 10px 30px rgba(0,0,0,.2)}
+  .modal header{padding:14px 16px;border-bottom:1px solid #eee;display:flex;justify-content:space-between;align-items:center}
+  .modal h3{margin:0;font-size:18px}
+  .modal .body{padding:16px;display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .modal .footer{padding:12px 16px;border-top:1px solid #eee;display:flex;gap:8px;justify-content:flex-end}
+  .team-card{border:1px solid #eee;border-radius:10px;padding:12px}
+  .team-card h4{margin:0 0 8px}
+  .row{display:flex;gap:8px;align-items:center;margin:6px 0}
+  select,button,input{padding:6px;border-radius:6px;border:1px solid #ccc}
+  .preset-row{display:flex;gap:8px;align-items:center;margin-bottom:8px}
+  .muted{color:#666;font-size:12px}
+</style>
+
+<div id="teamsModal" class="modal-backdrop" aria-hidden="true">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="teamsTitle">
+    <header>
+      <h3 id="teamsTitle">Set Lineups (1 Fire, 1 Water, 1 Earth per team)</h3>
+      <button id="teamsClose" aria-label="Close">✕</button>
+    </header>
+    <div class="body">
+      <div class="team-card">
+        <h4>Blue Team</h4>
+        <div class="preset-row">
+          <label>Preset:
+            <select id="bluePreset"></select>
+          </label>
+          <button id="blueLoadPreset">Load</button>
+        </div>
+        <div class="row"><label style="width:80px">Fire</label><select id="blueFire"></select></div>
+        <div class="row"><label style="width:80px">Water</label><select id="blueWater"></select></div>
+        <div class="row"><label style="width:80px">Earth</label><select id="blueEarth"></select></div>
+        <div class="muted">Tip: presets also enforce 1-per-element.</div>
+      </div>
+
+      <div class="team-card">
+        <h4>Red Team</h4>
+        <div class="preset-row">
+          <label>Preset:
+            <select id="redPreset"></select>
+          </label>
+          <button id="redLoadPreset">Load</button>
+        </div>
+        <div class="row"><label style="width:80px">Fire</label><select id="redFire"></select></div>
+        <div class="row"><label style="width:80px">Water</label><select id="redWater"></select></div>
+        <div class="row"><label style="width:80px">Earth</label><select id="redEarth"></select></div>
+      </div>
+    </div>
+    <div class="footer">
+      <button id="teamsCancel">Cancel</button>
+      <button id="teamsSave" style="background:#111;color:#fff;border-color:#111">Save</button>
+    </div>
+  </div>
+</div>
+
+  
 </body>
 </html>
