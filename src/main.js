@@ -153,7 +153,7 @@ $("#runBtn").addEventListener("click", () => {
     ...blueNotes.map(s => `[Blue] ${s}`),
     ...redNotes.map(s  => `[Red ] ${s}`),
     "",
-    `Starter: ${starterInfo.first}  (TB=${starterInfo.TB.toFixed(3)} vs TR=${starterInfo.TR.toFixed(3)})`,
+    `Starter: ${starterInfo.first}  (TB=${starterInfo.TB} vs TR=${starterInfo.TR})`,
     ""
   ].join("\n");
   $("#log").textContent = preface;
