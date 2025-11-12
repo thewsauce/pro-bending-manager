@@ -1,41 +1,58 @@
 // src/start_order.js
-// Decide who starts based on team tempo vs. opponent endurance,
-// with a small coin bonus. All values are normalized (0..1.x) so
-// tuning is predictable and END can never swamp tempo.
+// Initiative-based first-mover decision (always returns finite numbers)
 
 const wINI = 1.00;
 const wCMP = 0.60;
 const wRHY = 0.20;
+const kEND = 0.35;  // proportional endurance dampener
+const coinMin = 0.02;
+const coinMax = 0.05;
+const deadband = 0.01;
 
 export function firstMoverDecision(blue, red, rng) {
-  const deadband = 0.01; // tiny tie zone
-  const k = 0.35;        // END influence (proportional dampener)
-  const norm = v => v / 100;
+  const norm = (v) => (Number.isFinite(v) ? v : 0) / 100;
 
   const teamTempo = (team) => {
-    // avg over 3 players of (INI + 0.6*CMP + 0.2*RHY) normalized
-    const t = team.map(p => (
-      wINI * norm(p.INI) +
-      wCMP * norm(p.CMP) +
-      wRHY * norm(p.RHY)
-    ));
-    return (t[0] + t[1] + t[2]) / 3;
+    if (!Array.isArray(team) || team.length === 0) return 0;
+    const t = team.map((p) => {
+      const INI = norm(p?.INI);
+      const CMP = norm(p?.CMP);
+      const RHY = norm(p?.RHY);
+      return wINI * INI + wCMP * CMP + wRHY * RHY;
+    });
+    return t.reduce((a, b) => a + b, 0) / team.length;
   };
 
-  const maxEnd = (team) => Math.max(...team.map(p => norm(p.END))); // 0..1
+  const maxEnd = (team) => {
+    if (!Array.isArray(team) || team.length === 0) return 0;
+    const vals = team.map((p) => norm(p?.END));
+    return Math.max(...vals, 0);
+  };
 
   let TB = teamTempo(blue);
   let TR = teamTempo(red);
 
-  // Coin bonus: small, normalized bump (+2%..+5%)
-  const bonus = () => (0.02 + rng() * 0.03);
+  // ensure base finite defaults
+  if (!Number.isFinite(TB)) TB = 0;
+  if (!Number.isFinite(TR)) TR = 0;
+
+  // coin bonus (always finite)
+  const bonus = () => coinMin + rng() * (coinMax - coinMin);
   if (rng() < 0.5) TB += bonus(); else TR += bonus();
 
-  // Proportional END dampener (cannot exceed k*T)
-  TB *= (1 - k * maxEnd(red));
-  TR *= (1 - k * maxEnd(blue));
+  // proportional END dampener (cannot exceed kEND*T)
+  const redEnd = maxEnd(red);
+  const blueEnd = maxEnd(blue);
+  TB *= (1 - kEND * redEnd);
+  TR *= (1 - kEND * blueEnd);
 
-  if (TB > TR + deadband) return { first: "blue", TB, TR };
-  if (TR > TB + deadband) return { first: "red",  TB, TR  };
-  return { first: (rng() < 0.5 ? "blue" : "red"), TB, TR };
+  // sanity clamps
+  TB = Math.max(0, TB);
+  TR = Math.max(0, TR);
+
+  let first = "blue";
+  if (TR > TB + deadband) first = "red";
+  else if (Math.abs(TR - TB) <= deadband) first = rng() < 0.5 ? "blue" : "red";
+
+  return { first, TB, TR };
 }
