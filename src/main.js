@@ -1,79 +1,106 @@
 // src/main.js
-// UI orchestrator for Pro-Bending Manager.
-// Fixes: robust roster.json loading for GH Pages subpaths (no 404 crash).
-// Adds: 15s burst "boxing announcer" commentary in the UI (no sim changes).
+// Robust roster loader (works in GH Pages/Vite), conservative game loop, 15s announcer.
+// No changes to sim.js required.
 
 import { simulateRound, recoverBetweenRounds } from "./sim.js";
 import { buildAnnouncer } from "./announcer.js";
 import { mulberry32 } from "./util.js";
 
-// ---------- DOM ----------
+/* -------------------------------------------------------
+   DOM handles (adjust IDs only if your page differs)
+------------------------------------------------------- */
 const els = {
-  run1: document.getElementById("runRound") || document.getElementById("runBtn") || document.getElementById("startBtn"),
+  run1: document.getElementById("runRound"),
   next: document.getElementById("nextRound"),
   reset: document.getElementById("resetMatch"),
   seed: document.getElementById("seed"),
   dt: document.getElementById("dt"),
-  variance: document.getElementById("variance"),
-  cadence: document.getElementById("cadence"),
-  slow: document.getElementById("slowAnnouncer"),
-  result: document.getElementById("result") || document.getElementById("winner"),
+  result: document.getElementById("result"),
   blueBox: document.getElementById("blueTeam"),
   redBox: document.getElementById("redTeam"),
-  commentary: document.getElementById("commentary") || document.getElementById("log"),
+  commentary: document.getElementById("commentary"),
   summary: document.getElementById("summary"),
   timelineCanvas: document.getElementById("timeline"),
-  status: document.getElementById("status") || document.getElementById("rosterStatus"),
+  status: document.getElementById("rosterStatus") || document.getElementById("status"),
 };
 
-function setText(el, s){ if (el) el.textContent = s; }
-function appendText(el, s){ if (el) el.textContent = (el.textContent ? el.textContent + "\n" : "") + s; }
+const setText = (el, s) => { if (el) el.textContent = s; };
+const appendText = (el, s) => { if (el) el.textContent = (el.textContent ? el.textContent + "\n" : "") + s; };
 
-// ---------- Roster loading (robust to subpath / base href quirks) ----------
-async function tryFetch(url){
-  try{
-    const res = await fetch(url, { cache: "no-cache" });
-    if (res.ok) return await res.json();
-  }catch(_e){ /* ignore */ }
-  return null;
-}
+/* -------------------------------------------------------
+   Roster loading (multi-strategy)
+------------------------------------------------------- */
 async function loadRoster() {
-  // Try a few safe candidates in order
-  const base = location.pathname.replace(/\/index\.html?$/i,"");
-  const candidates = [
-    "src/roster.json",
-    "./src/roster.json",
-    `${base}/src/roster.json`,
-    new URL("src/roster.json", document.baseURI).href,
-    "/src/roster.json"
-  ];
-  for (const u of candidates){
-    const j = await tryFetch(u);
-    if (j) {
-      if (els.status) setText(els.status, "Rosters loaded.");
-      return j;
-    }
+  // (1) Global injected (e.g., via data.js)
+  if (globalThis.ROSTER && typeof globalThis.ROSTER === "object") {
+    setText(els.status, "Rosters loaded (global).");
+    return globalThis.ROSTER;
   }
-  if (els.status) setText(els.status, "Failed to load rosters.");
-  throw new Error("Unable to load src/roster.json via any candidate path");
+
+  // (2) Embedded in HTML
+  const tag = document.getElementById("roster-json");
+  if (tag?.textContent?.trim()) {
+    try {
+      const j = JSON.parse(tag.textContent);
+      setText(els.status, "Rosters loaded (inline).");
+      return j;
+    } catch {}
+  }
+
+  // (3) Bundler-safe URL (copies file when placed in src and built with ?url or import.meta.url)
+  try {
+    const href = new URL("./roster.json", import.meta.url).href;
+    const r = await fetch(href, { cache: "no-cache" });
+    if (r.ok) {
+      setText(els.status, "Rosters loaded (import.meta.url).");
+      return await r.json();
+    }
+  } catch {}
+
+  // (4) Plain relative fetch from site root/public
+  for (const u of ["./roster.json", "roster.json", "/roster.json"]) {
+    try {
+      const r = await fetch(u, { cache: "no-cache" });
+      if (r.ok) {
+        setText(els.status, `Rosters loaded (${u}).`);
+        return await r.json();
+      }
+    } catch {}
+  }
+
+  // (5) Dynamic import from data.js fallback
+  try {
+    const mod = await import("./data.js");
+    const candidate = mod?.default || mod?.ROSTER || globalThis.ROSTER;
+    if (candidate) {
+      setText(els.status, "Rosters loaded (data.js).");
+      return candidate;
+    }
+  } catch {}
+
+  setText(els.status, "Failed to load rosters.");
+  throw new Error("Unable to load roster via any strategy.");
 }
 
-// ---------- Team build / display ----------
-function cloneP(p){ return { ...p }; }
-function buildTeam(roster, ids){ return ids.map(id => cloneP(roster.players[id])); }
+/* -------------------------------------------------------
+   Team helpers
+------------------------------------------------------- */
+const cloneP = (p) => ({ ...p });
+const buildTeam = (roster, ids) => ids.map(id => cloneP(roster.players[id]));
 
 function fmtPlayer(p){
-  const nb = v => (v ?? 0);
-  return `${p.name} | ${p.el?.toUpperCase()||"?"} | OVR ~ ${Math.round(
-    (nb(p.STR)+nb(p.PRC)+nb(p.INI)+nb(p.RHY)+nb(p.GST)+nb(p.AWR)+nb(p.CMP)+nb(p.POS))/8
-  )} | INI:${p.INI} STR:${p.STR} PRC:${p.PRC} GST:${p.GST} AWR:${p.AWR} RHY:${p.RHY} CMP:${p.CMP} POS:${p.POS} STM:${p.STM} END:${p.END}`;
+  const n = (x)=>x??0;
+  const ovr = Math.round((n(p.STR)+n(p.PRC)+n(p.INI)+n(p.RHY)+n(p.GST)+n(p.AWR)+n(p.CMP)+n(p.POS))/8);
+  return `${p.name} | ${p.el?.toUpperCase()||"?"} | OVR:${ovr} | INI:${p.INI} STR:${p.STR} PRC:${p.PRC} GST:${p.GST} AWR:${p.AWR} RHY:${p.RHY} CMP:${p.CMP} POS:${p.POS} STM:${p.STM} END:${p.END}`;
 }
 function renderTeam(el, team){
   if (!el) return;
   el.textContent = team.map(fmtPlayer).join("\n");
 }
 
-// ---------- Announcer helpers (no sim changes required) ----------
+/* -------------------------------------------------------
+   Announcer (works even if sim.js doesn’t emit events)
+------------------------------------------------------- */
 function synthesizeEventsFromTimeline(timeline) {
   const ev = Array.from({ length: timeline.length }, () => []);
   for (let t = 1; t < timeline.length; t++) {
@@ -88,7 +115,6 @@ function synthesizeEventsFromTimeline(timeline) {
   }
   return ev;
 }
-
 function renderAnnouncer(result, dt, seed) {
   const rng = mulberry32(String(seed) + ":announcer");
   const events = result.events ?? synthesizeEventsFromTimeline(result.timeline);
@@ -96,7 +122,9 @@ function renderAnnouncer(result, dt, seed) {
   if (els.commentary) els.commentary.textContent = lines.join("\n");
 }
 
-// ---------- Tiny timeline renderer (optional) ----------
+/* -------------------------------------------------------
+   Tiny timeline renderer
+------------------------------------------------------- */
 function drawTimeline(timeline) {
   const c = els.timelineCanvas;
   if (!c || !c.getContext) return;
@@ -118,15 +146,18 @@ function drawTimeline(timeline) {
   ctx.stroke();
 }
 
-// ---------- First mover (use your dedicated start_order if you have it) ----------
+/* -------------------------------------------------------
+   First mover (leave your deeper logic elsewhere)
+------------------------------------------------------- */
 function firstMoverDecision(_blue,_red,seed){
   const h = [...String(seed)].reduce((a,c)=>a+c.charCodeAt(0),0);
   return (h % 2 === 0) ? "blue" : "red";
 }
 
-// ---------- Round runner ----------
-async function runOneRound(ctx){
-  const { seed, dt, blueTeam, redTeam, carry } = ctx;
+/* -------------------------------------------------------
+   Round + Match loops (conservative)
+------------------------------------------------------- */
+async function runOneRound({ seed, dt, blueTeam, redTeam, carry }) {
   const first = firstMoverDecision(blueTeam, redTeam, seed);
 
   const result = simulateRound({
@@ -141,23 +172,18 @@ async function runOneRound(ctx){
   drawTimeline(result.timeline);
 
   setText(els.result, `Round Winner: ${result.winner} | Final zone: ${result.zone > 0 ? "+" : ""}${result.zone}`);
-
-  // Minimal summary line
   if (els.summary) {
-    const bluePct = Math.round((result.endFactors?.ticksBlueZone ?? 0) / (result.timeline?.length || 1) * 100);
-    const redPct  = Math.round((result.endFactors?.ticksRedZone  ?? 0) / (result.timeline?.length || 1) * 100);
-    setText(els.summary, `Zone Control — Blue ${bluePct}% / Red ${redPct}%`);
+    const bz = result.endFactors?.ticksBlueZone ?? 0;
+    const rz = result.endFactors?.ticksRedZone ?? 0;
+    const L = result.timeline?.length || 1;
+    setText(els.summary, `Zone Control — Blue ${Math.round(bz/L*100)}% / Red ${Math.round(rz/L*100)}%`);
   }
 
   const carryNext = recoverBetweenRounds(blueTeam, redTeam, result.endFactors);
   return { result, carryNext };
 }
 
-// ---------- Match loop ----------
-async function runMatch(opts){
-  const { roster, rounds, seed, dt } = opts;
-
-  // pick two teams (keep your previous selection logic if you had UI)
+async function runMatch({ roster, rounds, seed, dt }){
   const teamIds = Object.keys(roster.teams || {});
   const blueId = teamIds[0];
   const redId  = teamIds[1] || teamIds[0];
@@ -168,10 +194,9 @@ async function runMatch(opts){
   renderTeam(els.blueBox, blueTeam);
   renderTeam(els.redBox,  redTeam);
 
-  if (els.commentary) els.commentary.textContent = "-";
+  if (els.commentary) els.commentary.textContent = "";
 
-  let carry = null;
-  let bw=0, rw=0;
+  let carry = null, bw = 0, rw = 0;
   for (let r=1; r<=rounds; r++){
     const { result, carryNext } = await runOneRound({
       seed: `${seed}:R${r}`,
@@ -182,52 +207,47 @@ async function runMatch(opts){
     });
     if (result.winner === "Blue") bw++;
     else if (result.winner === "Red") rw++;
-
     appendText(els.commentary, `\n— End of Round ${r}: ${result.winner} —`);
     carry = carryNext;
   }
-
   appendText(els.commentary, `\nFinal: Blue ${bw} — Red ${rw}`);
 }
 
-// ---------- Bootstrap / Controls ----------
+/* -------------------------------------------------------
+   Bootstrap
+------------------------------------------------------- */
 (async function init(){
   setText(els.result, "-");
-  setText(els.commentary, "-");
   setText(els.summary, "-");
+  setText(els.commentary, "-");
   if (els.status) setText(els.status, "Loading rosters…");
 
-  let roster = null;
+  let roster;
   try {
     roster = await loadRoster();
   } catch (e) {
-    console.error(e);
-    if (els.commentary) setText(els.commentary, "Could not load rosters. Check src/roster.json path.");
-    return; // stop; do not wire run buttons if data missing
+    console.error("Roster load error:", e);
+    setText(els.commentary, "Could not load rosters. Check src/roster.json path.");
+    return; // stop; prevent run buttons from firing a broken sim
   }
 
-  const getSeed = () => (els.seed?.value?.trim() || "stormfront42");
-  const getDt = () => Math.max(1, parseInt(els.dt?.value || "5", 10));
+  const seedOf = () => (els.seed?.value?.trim() || "stormfront42");
+  const dtOf   = () => Math.max(1, parseInt(els.dt?.value || "5", 10));
 
-  const start = async () => {
+  const startOne = async () => {
     if (els.commentary) els.commentary.textContent = "";
-    await runMatch({
-      roster,
-      rounds: 1,
-      seed: getSeed(),
-      dt: getDt()
-    });
+    await runMatch({ roster, rounds: 1, seed: seedOf(), dt: dtOf() });
   };
 
-  if (els.run1) els.run1.onclick = start;
-  if (els.next) els.next.onclick = start;
+  if (els.run1) els.run1.onclick = startOne;
+  if (els.next) els.next.onclick = startOne;
   if (els.reset) els.reset.onclick = () => {
-    if (els.commentary) els.commentary.textContent = "-";
+    setText(els.commentary, "-");
     setText(els.result, "-");
     setText(els.summary, "-");
-    drawTimeline([0,0]); // clear-ish
+    drawTimeline([0,0]);
   };
 
-  // Optional: auto-run once if you prefer
-  // start();
+  // Optional: auto-run once in dev
+  // startOne();
 })();
