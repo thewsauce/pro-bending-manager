@@ -1,186 +1,294 @@
-// src/announcer.js
-// Lightweight “boxing-announcer” commentary generator.
-// API: buildAnnouncer(events, dt, timeline, rng?) -> string[]
-// - events: Array< Array<Event> > indexed by tick (can be empty arrays).
-//           Known Event: { type: 'zone', SIDE:'Blue'|'Red', ZONE:'+0.8' }
-// - dt: tick size in seconds (e.g., 5)
-// - timeline: numeric zone values per tick (length === events.length ideal)
-// - rng: optional PRNG fn () => [0,1). If absent, fallback to Math.random.
+// src/main.js
+// Pro-Bending Manager — UI orchestrator + announcer + robust roster loader.
+// Works on raw GitHub Pages (no bundler) and tolerates future Vite builds.
 
-const rand = (rng) => (typeof rng === "function" ? rng() : Math.random());
-const sample = (arr, rng) => arr[Math.floor(rand(rng) * arr.length)] || arr[0];
-const secToClock = (s) => {
-  const m = Math.floor((s || 0) / 60);
-  const r = Math.max(0, Math.floor((s || 0) - m * 60));
-  const mm = String(m).padStart(1, "0");
-  const ss = String(r).padStart(2, "0");
-  return `${mm}:${ss}`;
+import { simulateRound, recoverBetweenRounds } from "./sim.js";
+import { buildAnnouncer } from "./announcer.js";
+import { mulberry32 } from "./util.js";
+
+/* -------------------------------------------------------
+   DOM wires (match your page IDs)
+------------------------------------------------------- */
+const els = {
+  run1: document.getElementById("runRound"),
+  next: document.getElementById("nextRound"),
+  reset: document.getElementById("resetMatch"),
+  seed: document.getElementById("seed"),
+  dt: document.getElementById("dt"),
+  result: document.getElementById("result"),
+  blueBox: document.getElementById("blueTeam"),
+  redBox: document.getElementById("redTeam"),
+  commentary: document.getElementById("commentary"),
+  summary: document.getElementById("summary"),
+  timelineCanvas: document.getElementById("timeline"),
+  status: document.getElementById("rosterStatus") || document.getElementById("status"),
 };
 
-const hypeOpeners = [
-  "The gong sounds—here we go!",
-  "We’re live! Gloves up, eyes sharp!",
-  "Bell rings—round underway!",
-  "Crowd roaring, pressure builds!"
-];
+const setText = (el, s) => { if (el) el.textContent = s; };
+const appendText = (el, s) => { if (el) el.textContent = (el.textContent ? el.textContent + "\n" : "") + s; };
+const f1 = (x) => Number.isFinite(x) ? x.toFixed(1) : "0.0";
 
-const neutralBeats = [
-  "Both sides measuring distance.",
-  "Feints and footwork—testing the guard.",
-  "A steady jab of pressure, no clean lane yet.",
-  "Tempo magnets pulling center, neither blinking."
-];
+/* -------------------------------------------------------
+   Roster loading (diagnostic, GH Pages first)
+------------------------------------------------------- */
+async function loadRoster() {
+  const tried = [];
 
-const bluePush = [
-  "Blue steps in with stiff jabs—edge Blue!",
-  "Blue churns the guard—ringcraft on display!",
-  "Blue wins the beat—forcing the lane!",
-  "Blue’s timing slices through—momentum rising!"
-];
-
-const redPush = [
-  "Red surges—heavy hands in the pocket!",
-  "Red bullies the line—back ’em up!",
-  "Red hammers the beat—control flipping!",
-  "Red’s cadence bites—momentum accrues!"
-];
-
-const flipLines = {
-  Blue: [
-    "Blue FLIPS the field—crowd explodes!",
-    "Blue steals center—huge momentum swing!",
-    "Blue storms ahead—tables turned!"
-  ],
-  Red: [
-    "Red FLIPS control—what a reversal!",
-    "Red steals the midline—stunning swing!",
-    "Red storms into command—momentum swings!"
-  ]
-};
-
-const bigHit = {
-  Blue: [
-    "Blue detonates—massive shove lands!",
-    "Blue cracks the guard—clean power!",
-    "Blue stacks the combo—ring shakes!"
-  ],
-  Red: [
-    "Red detonates—huge shove connects!",
-    "Red splits the guard—wicked hit!",
-    "Red stacks a mean combo—answer that!"
-  ]
-};
-
-const clutch = {
-  Blue: [
-    "Blue in the clutch—ice in the veins!",
-    "Blue squeezes seconds dry—champion’s poise!",
-    "Blue shuts the door—clinical finish!"
-  ],
-  Red: [
-    "Red in the clutch—steel-nerved!",
-    "Red owns the last beat—stone-cold!",
-    "Red closes ruthless—statement made!"
-  ],
-  Even: [
-    "Both sides gasping—final breaths!",
-    "Every second a blade’s edge!",
-    "Nothing given, nothing left!"
-  ]
-};
-
-const outro = {
-  Blue: [
-    "Horn sounds—round to Blue!",
-    "Time! Blue edges it!",
-    "End of round—Blue on top!"
-  ],
-  Red: [
-    "Horn sounds—round to Red!",
-    "Time! Red takes it!",
-    "End of round—Red ahead!"
-  ],
-  Draw: [
-    "Horn! Too close—call it even!",
-    "Time! Razor-thin—dead even!",
-    "End of round—nothing in it!"
-  ]
-};
-
-export function buildAnnouncer(events, dt, timeline, rng) {
-  const lines = [];
-  const ev = Array.isArray(events) ? events : [];
-  const tl = Array.isArray(timeline) ? timeline : [];
-  const T = Math.max(ev.length, tl.length);
-  const step = Number.isFinite(dt) && dt > 0 ? dt : 5;
-
-  // How often to speak if nothing special happens (≈15s cadence)
-  const speakEvery = Math.max(1, Math.round(15 / step));
-
-  // opener
-  lines.push(sample(hypeOpeners, rng));
-
-  let lastSign = 0; // for flip detection
-  let spokeAt = -999;
-
-  for (let t = 0; t < T; t++) {
-    const z = Number.isFinite(tl[t]) ? tl[t] : 0;
-    const prev = Number.isFinite(tl[t - 1]) ? tl[t - 1] : 0;
-    const dz = z - prev;
-    const sgn = z === 0 ? 0 : (z > 0 ? 1 : -1);
-    const clk = secToClock(t * step);
-
-    // Consume explicit events first
-    const bucket = Array.isArray(ev[t]) ? ev[t] : [];
-
-    // Big swings (synthetic or provided)
-    let firedThisTick = false;
-    for (const e of bucket) {
-      if (e?.type === "zone" && (e.SIDE === "Blue" || e.SIDE === "Red")) {
-        lines.push(`[${clk}] ${sample(bigHit[e.SIDE], rng)} (${e.ZONE})`);
-        firedThisTick = true;
-      }
-    }
-
-    // Detect flips across midline
-    if (!firedThisTick && lastSign !== 0 && sgn !== 0 && sgn !== lastSign) {
-      const side = sgn > 0 ? "Blue" : "Red";
-      lines.push(`[${clk}] ${sample(flipLines[side], rng)} (${z >= 0 ? "+" : ""}${z.toFixed(1)})`);
-      spokeAt = t;
-      firedThisTick = true;
-    }
-
-    // Momentum pulses (no event this tick)
-    if (!firedThisTick) {
-      // big pulse
-      if (Math.abs(dz) > 0.6) {
-        const side = dz > 0 ? "Blue" : "Red";
-        const bank = side === "Blue" ? bluePush : redPush;
-        lines.push(`[${clk}] ${sample(bank, rng)} (${z >= 0 ? "+" : ""}${z.toFixed(1)})`);
-        spokeAt = t;
-      } else if (t - spokeAt >= speakEvery) {
-        // neutral beat if we've been quiet ~15s
-        lines.push(`[${clk}] ${sample(neutralBeats, rng)}`);
-        spokeAt = t;
-      }
-    }
-
-    lastSign = sgn;
+  // (0) Global injected (window.ROSTER)
+  if (globalThis.ROSTER && typeof globalThis.ROSTER === "object") {
+    setText(els.status, "Rosters loaded (global).");
+    console.debug("[roster] using globalThis.ROSTER");
+    return globalThis.ROSTER;
   }
 
-  // Clutch call + outro based on last zone
-  const zf = Number.isFinite(tl[T - 1]) ? tl[T - 1] : 0;
-  const who = zf > 0 ? "Blue" : zf < 0 ? "Red" : "Draw";
-
-  if (who === "Draw") {
-    lines.push(sample(clutch.Even, rng));
-    lines.push(sample(outro.Draw, rng));
-  } else {
-    lines.push(sample(clutch[who], rng));
-    lines.push(sample(outro[who], rng));
+  // (1) Inline JSON in HTML
+  const tag = document.getElementById("roster-json");
+  if (tag?.textContent?.trim()) {
+    try {
+      const j = JSON.parse(tag.textContent);
+      setText(els.status, "Rosters loaded (inline).");
+      console.debug("[roster] loaded inline <script id=roster-json>");
+      return j;
+    } catch (e) {
+      console.warn("[roster] inline parse failed:", e);
+    }
   }
 
+  // (2) Plain paths (works on raw GitHub Pages)
+  const plain = ["src/roster.json", "./src/roster.json", "roster.json", "./roster.json", "/roster.json"];
+  for (const u of plain) {
+    tried.push(u);
+    try {
+      const r = await fetch(u, { cache: "no-cache" });
+      console.debug("[roster] fetch", u, r.status);
+      if (r.ok) {
+        setText(els.status, `Rosters loaded (${u}).`);
+        return await r.json();
+      }
+    } catch (e) {
+      console.warn("[roster] fetch error", u, e);
+    }
+  }
+
+  // (3) Vite-style asset via import.meta.url (only after bundling)
+  try {
+    const href = new URL("./roster.json", import.meta.url).href;
+    tried.push(href);
+    const r = await fetch(href, { cache: "no-cache" });
+    console.debug("[roster] fetch", href, r.status);
+    if (r.ok) {
+      setText(els.status, "Rosters loaded (import.meta.url).");
+      return await r.json();
+    }
+  } catch (e) {
+    console.warn("[roster] import.meta.url failed:", e);
+  }
+
+  // (4) data.js fallback
+  try {
+    const mod = await import("./data.js");
+    const candidate = mod?.default || mod?.ROSTER || globalThis.ROSTER;
+    if (candidate) {
+      setText(els.status, "Rosters loaded (data.js).");
+      console.debug("[roster] loaded from data.js");
+      return candidate;
+    }
+  } catch (e) {
+    console.warn("[roster] data.js import failed:", e);
+  }
+
+  const msg = `Failed to load rosters. Tried: ${tried.join(", ")}`;
+  setText(els.status, msg);
+  throw new Error(msg);
+}
+
+/* -------------------------------------------------------
+   Team helpers
+------------------------------------------------------- */
+const cloneP = (p) => ({ ...p });
+const buildTeam = (roster, ids) => (ids || []).map(id => cloneP(roster.players[id] ?? {}));
+
+function fmtPlayer(p){
+  const n = (x)=> Number.isFinite(x) ? x : 0;
+  const ovr = Math.round((n(p.STR)+n(p.PRC)+n(p.INI)+n(p.RHY)+n(p.GST)+n(p.AWR)+n(p.CMP)+n(p.POS))/8);
+  const el = (p.el?.toUpperCase?.() ?? "?");
+  return `${p.name ?? "?"} | ${el} | OVR ~ ${ovr} | INI:${n(p.INI)} STR:${n(p.STR)} PRC:${n(p.PRC)} GST:${n(p.GST)} AWR:${n(p.AWR)} RHY:${n(p.RHY)} CMP:${n(p.CMP)} POS:${n(p.POS)} STM:${n(p.STM)} END:${n(p.END)}`;
+}
+function renderTeam(el, team){
+  if (!el) return;
+  el.textContent = team.map(fmtPlayer).join("\n");
+}
+
+/* -------------------------------------------------------
+   Announcer support
+------------------------------------------------------- */
+function synthesizeEventsFromTimeline(timeline = []) {
+  const ev = Array.from({ length: timeline.length }, () => []);
+  for (let t = 1; t < timeline.length; t++) {
+    const prev = Number.isFinite(timeline[t-1]) ? timeline[t-1] : 0;
+    const curr = Number.isFinite(timeline[t])   ? timeline[t]   : 0;
+    const dz = curr - prev;
+    if (Math.abs(dz) > 0.6) {
+      ev[t].push({
+        type: "zone",
+        SIDE: dz > 0 ? "Blue" : "Red",
+        ZONE: (curr >= 0 ? "+" : "") + f1(curr),
+      });
+    }
+  }
+  return ev;
+}
+
+function renderAnnouncer(result, dt, seed) {
+  const rng = mulberry32(String(seed) + ":announcer");
+  const events = result?.events ?? synthesizeEventsFromTimeline(result?.timeline ?? []);
+  const lines = buildAnnouncer(events, dt, result?.timeline ?? [], rng);
+  if (els.commentary) els.commentary.textContent = lines.join("\n");
   return lines;
 }
 
-export default { buildAnnouncer };
+/* -------------------------------------------------------
+   Timeline (tiny canvas)
+------------------------------------------------------- */
+function drawTimeline(timeline = []) {
+  const c = els.timelineCanvas;
+  if (!c || !c.getContext) return;
+  const ctx = c.getContext("2d");
+  const W = c.width  || c.clientWidth  || 900;
+  const H = c.height || c.clientHeight || 160;
+  c.width = W; c.height = H;
+
+  ctx.clearRect(0,0,W,H);
+
+  // midline
+  ctx.strokeStyle = "#555"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0,H/2); ctx.lineTo(W,H/2); ctx.stroke();
+
+  if (!Array.isArray(timeline) || timeline.length === 0) return;
+
+  // path
+  ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.beginPath();
+  for (let i=0;i<timeline.length;i++){
+    const z = Number.isFinite(timeline[i]) ? timeline[i] : 0;
+    const x = (i/(timeline.length-1)) * W;
+    // assume zone in ~[-3,+3], map to canvas with padding
+    const y = H/2 - (z/3) * (H/2 - 8);
+    if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+  }
+  ctx.stroke();
+}
+
+/* -------------------------------------------------------
+   First mover (simple; swap with start_order.js if you have it)
+------------------------------------------------------- */
+function firstMoverDecision(_blue,_red,seed){
+  const h = [...String(seed)].reduce((a,c)=>a+c.charCodeAt(0),0);
+  return (h % 2 === 0) ? "blue" : "red";
+}
+
+/* -------------------------------------------------------
+   Round runner
+------------------------------------------------------- */
+async function runOneRound({ seed, dt, blueTeam, redTeam, carry }) {
+  const first = firstMoverDecision(blueTeam, redTeam, seed);
+
+  const result = simulateRound({
+    seed,
+    dt,
+    blue: blueTeam,
+    red:  redTeam,
+    firstMover: first
+  });
+
+  // Announcer + Graph
+  renderAnnouncer(result, dt, seed);
+  drawTimeline(result.timeline);
+
+  // Result + summary
+  const zone = Number.isFinite(result.zone) ? (result.zone >= 0 ? `+${f1(result.zone)}` : f1(result.zone)) : "0.0";
+  setText(els.result, `Round Winner: ${result.winner} | Final zone: ${zone}`);
+
+  if (els.summary) {
+    const L = (result.timeline?.length) || 1;
+    const bz = Number.isFinite(result.endFactors?.ticksBlueZone) ? result.endFactors.ticksBlueZone : 0;
+    const rz = Number.isFinite(result.endFactors?.ticksRedZone)  ? result.endFactors.ticksRedZone  : 0;
+    const bPct = Math.round((bz / L) * 100);
+    const rPct = Math.round((rz / L) * 100);
+    setText(els.summary, `Zone Control — Blue ${bPct}% / Red ${rPct}%`);
+  }
+
+  const carryNext = recoverBetweenRounds(blueTeam, redTeam, result.endFactors);
+  return { result, carryNext };
+}
+
+/* -------------------------------------------------------
+   Match loop (single round by default)
+------------------------------------------------------- */
+async function runMatch({ roster, rounds, seed, dt }){
+  const teamIds = Object.keys(roster.teams || {});
+  const blueId = teamIds[0];
+  const redId  = teamIds[1] || teamIds[0];
+
+  const blueTeam = buildTeam(roster, roster.teams[blueId] || []);
+  const redTeam  = buildTeam(roster, roster.teams[redId]  || []);
+
+  renderTeam(els.blueBox, blueTeam);
+  renderTeam(els.redBox,  redTeam);
+
+  if (els.commentary) els.commentary.textContent = "";
+
+  let carry = null, bw = 0, rw = 0;
+  for (let r=1; r<=rounds; r++){
+    const { result, carryNext } = await runOneRound({
+      seed: `${seed}:R${r}`,
+      dt,
+      blueTeam,
+      redTeam,
+      carry
+    });
+    if (result.winner === "Blue") bw++;
+    else if (result.winner === "Red") rw++;
+    appendText(els.commentary, `\n— End of Round ${r}: ${result.winner} —`);
+    carry = carryNext;
+  }
+  appendText(els.commentary, `\nFinal: Blue ${bw} — Red ${rw}`);
+}
+
+/* -------------------------------------------------------
+   Bootstrap
+------------------------------------------------------- */
+(async function init(){
+  setText(els.result, "-");
+  setText(els.summary, "-");
+  setText(els.commentary, "-");
+  if (els.status) setText(els.status, "Loading rosters…");
+
+  let roster;
+  try {
+    roster = await loadRoster();
+  } catch (e) {
+    console.error("Roster load error:", e);
+    setText(els.commentary, "❌ Could not load rosters. Open Console → Network and click `src/roster.json`. If it 404s, ensure the file exists and path matches.");
+    return;
+  }
+
+  const seedOf = () => (els.seed?.value?.trim() || "stormfront42");
+  const dtOf   = () => Math.max(1, parseInt(els.dt?.value || "5", 10));
+
+  const startOne = async () => {
+    if (els.commentary) els.commentary.textContent = "";
+    await runMatch({ roster, rounds: 1, seed: seedOf(), dt: dtOf() });
+  };
+
+  if (els.run1) els.run1.onclick = startOne;
+  if (els.next) els.next.onclick = startOne;
+  if (els.reset) els.reset.onclick = () => {
+    setText(els.commentary, "-");
+    setText(els.result, "-");
+    setText(els.summary, "-");
+    drawTimeline([0,0]);
+  };
+
+  // Optional dev auto-run:
+  // startOne();
+})();
