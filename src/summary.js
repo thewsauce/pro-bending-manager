@@ -1,41 +1,86 @@
-import {avg, fmt} from "./util.js";
+// src/summary.js
+const f1 = (x) => Number.isFinite(x) ? x.toFixed(1) : "0.0";
+const f2 = (x) => Number.isFinite(x) ? x.toFixed(2) : "0.00";
+const f3 = (x) => Number.isFinite(x) ? x.toFixed(3) : "0.000";
 
-export function summarizeRound(out, blue, red){
-  const tl = out.timeline, total = tl.length;
-  const blueTicks = tl.filter(p=>p.zone>0).length;
-  const redTicks  = tl.filter(p=>p.zone<0).length;
+const pct = (num, den) => (den > 0 && Number.isFinite(num)) ? (num / den * 100) : 0;
 
-  let maxSwing={i:0,d:0}; tl.forEach((p,i)=>{const a=Math.abs(p.delta); if(a>Math.abs(maxSwing.d))maxSwing={i,d:p.delta};});
-  const s = tl[maxSwing.i], b = tl[Math.max(0,maxSwing.i-1)], a = tl[Math.min(tl.length-1,maxSwing.i+1)];
-  const swingTeam = maxSwing.d>0 ? "Blue Team" : "Red Team";
+function avg(arr) {
+  if (!Array.isArray(arr) || arr.length === 0) return 0;
+  let s = 0;
+  for (let i = 0; i < arr.length; i++) s += (Number.isFinite(arr[i]) ? arr[i] : 0);
+  return s / arr.length;
+}
+function pAvg(p, keys) {
+  return avg(keys.map(k => Number.isFinite(p[k]) ? p[k] : 0));
+}
 
-  let winText = "Draw on time at midfield.";
-  if (out.winner.includes("Blue")) winText = `Blue by zone advantage (final zone ${fmt(out.zone)})`;
-  else if (out.winner.includes("Red")) winText = `Red by zone advantage (final zone ${fmt(out.zone)})`;
+export function summarizeRound(out, blue, red) {
+  // Defensive reads
+  const timeline = Array.isArray(out?.timeline) ? out.timeline : [];
+  const T = timeline.length;
 
-  const avgSTMb = avg(tl.map(x=>x.stamB)), avgSTMr = avg(tl.map(x=>x.stamR));
-  const avgCMPb = avg(tl.map(x=>x.compB)), avgCMPr = avg(tl.map(x=>x.compR));
-  const score = (team, sStm, sCmp) => team.map(p=>{
-    const off=(p.STR+p.PRC+p.INI+p.RHY)/4, def=(p.GST+p.AWR+p.CMP+p.POS)/4;
-    const impact = off*(0.6+0.4*sStm) + def*(0.4+0.6*sCmp);
-    return {name:p.name, off:Math.round(off), def:Math.round(def), impact:Math.round(impact)};
-  }).sort((x,y)=>y.impact-x.impact);
+  const ticksBlueZone = timeline.reduce((a, z) => a + (Number.isFinite(z) && z > 0 ? 1 : 0), 0);
+  const ticksRedZone  = timeline.reduce((a, z) => a + (Number.isFinite(z) && z < 0 ? 1 : 0), 0);
+  const bluePct = pct(ticksBlueZone, T);
+  const redPct  = pct(ticksRedZone, T);
 
-  let mvp, mvpTeam;
-  if (out.winner.includes("Blue")){ mvp=score(blue,avgSTMb,avgCMPb)[0]; mvpTeam="Blue Team"; }
-  else if (out.winner.includes("Red")){ mvp=score(red,avgSTMr,avgCMPr)[0]; mvpTeam="Red Team"; }
-  else {
-    const A=score(blue,avgSTMb,avgCMPb)[0], B=score(red,avgSTMr,avgCMPr)[0];
-    mvp = Math.abs(out.zone)<0.05 ? (A.impact>=B.impact?A:B) : (out.zone>0?A:B);
-    mvpTeam = Math.abs(out.zone)<0.05 ? "Tie" : (out.zone>0?"Blue Team":"Red Team");
+  // Big swing telemetry (already provided in out.endFactors but safe-calc if missing)
+  const deltas = [];
+  for (let i = 1; i < T; i++) {
+    const a = Number.isFinite(timeline[i-1]) ? timeline[i-1] : 0;
+    const b = Number.isFinite(timeline[i])   ? timeline[i]   : 0;
+    deltas.push(b - a);
+  }
+  let maxMag = 0, maxIdx = -1, dir = 0;
+  for (let i = 0; i < deltas.length; i++) {
+    const m = Math.abs(deltas[i]);
+    if (m > maxMag) { maxMag = m; maxIdx = i; dir = deltas[i] >= 0 ? +1 : -1; }
   }
 
-  return `Win: ${winText}
-Zone Control: Blue ${Math.round(100*blueTicks/total)}% | Red ${Math.round(100*redTicks/total)}%
-Max Swing: ${s.time}s  Δ${fmt(s.delta)} toward ${swingTeam}
-Play of the Round:
-  ${s.time}s: zone ${fmt(b.zone)} → ${fmt(s.zone)} → ${fmt(a.zone)} 
-  STM(B/R) ${s.stamB.toFixed(2)}/${s.stamR.toFixed(2)} | CMP(B/R) ${s.compB.toFixed(2)}/${s.compR.toFixed(2)}
+  const zoneBefore = (maxIdx >= 0 && Number.isFinite(timeline[maxIdx])) ? timeline[maxIdx] : 0;
+  const zoneAfter  = (maxIdx+1 >= 0 && maxIdx+1 < T && Number.isFinite(timeline[maxIdx+1])) ? timeline[maxIdx+1] : zoneBefore;
+  const swingTimeSec = (maxIdx+1); // 1 step ~ 1 tick; UI shows time elsewhere
 
-MVP: ${mvp.name} (${mvpTeam}) — Off ${mvp.off}, Def ${mvp.def}, Impact ${mvp.impact}`;
+  // MVP heuristic (safe)
+  const keysOff = ["STR","PRC","INI","RHY"];
+  const keysDef = ["GST","AWR","CMP","POS"];
+
+  const teamImpact = (team) => {
+    if (!Array.isArray(team) || team.length === 0) return { best: null, score: 0 };
+    let best = null, bestScore = -1e9;
+    for (const p of team) {
+      const off = pAvg(p, keysOff);
+      const def = pAvg(p, keysDef);
+      // Weighting constants; treat as plain averages here (no risky multipliers)
+      const score = off * 0.6 + def * 0.6;
+      if (score > bestScore) { bestScore = score; best = p; }
+    }
+    return { best, score: bestScore };
+  };
+
+  const winner = out?.winner || "Draw";
+  const blueImp = teamImpact(blue);
+  const redImp  = teamImpact(red);
+  const mvp = winner === "Blue" ? (blueImp.best || redImp.best) :
+              winner === "Red"  ? (redImp.best  || blueImp.best) :
+              (blueImp.score >= redImp.score ? blueImp.best : redImp.best);
+
+  // Narrative summary text
+  const swingLine = (maxIdx >= 0)
+    ? `Play of the round: ${dir>=0 ? "Blue surge" : "Red counter"} at tick ${swingTimeSec} — zone ${f2(zoneBefore)} → ${f2(zoneAfter)}`
+    : `Play of the round: —`;
+
+  const mvpLine = mvp
+    ? `MVP: ${mvp.name} (${mvp.el}) — Off≈${f1(pAvg(mvp, keysOff))}, Def≈${f1(pAvg(mvp, keysDef))}`
+    : `MVP: —`;
+
+  const controlLine = `Zone Control — Blue ${f1(bluePct)}% / Red ${f1(redPct)}%`;
+
+  return [
+    `Winner: ${winner}`,
+    controlLine,
+    swingLine,
+    mvpLine
+  ].join("\n");
 }
