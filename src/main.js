@@ -1,253 +1,186 @@
-// src/main.js
-// Robust roster loader (works in GH Pages/Vite), conservative game loop, 15s announcer.
-// No changes to sim.js required.
+// src/announcer.js
+// Lightweight “boxing-announcer” commentary generator.
+// API: buildAnnouncer(events, dt, timeline, rng?) -> string[]
+// - events: Array< Array<Event> > indexed by tick (can be empty arrays).
+//           Known Event: { type: 'zone', SIDE:'Blue'|'Red', ZONE:'+0.8' }
+// - dt: tick size in seconds (e.g., 5)
+// - timeline: numeric zone values per tick (length === events.length ideal)
+// - rng: optional PRNG fn () => [0,1). If absent, fallback to Math.random.
 
-import { simulateRound, recoverBetweenRounds } from "./sim.js";
-import { buildAnnouncer } from "./announcer.js";
-import { mulberry32 } from "./util.js";
-
-/* -------------------------------------------------------
-   DOM handles (adjust IDs only if your page differs)
-------------------------------------------------------- */
-const els = {
-  run1: document.getElementById("runRound"),
-  next: document.getElementById("nextRound"),
-  reset: document.getElementById("resetMatch"),
-  seed: document.getElementById("seed"),
-  dt: document.getElementById("dt"),
-  result: document.getElementById("result"),
-  blueBox: document.getElementById("blueTeam"),
-  redBox: document.getElementById("redTeam"),
-  commentary: document.getElementById("commentary"),
-  summary: document.getElementById("summary"),
-  timelineCanvas: document.getElementById("timeline"),
-  status: document.getElementById("rosterStatus") || document.getElementById("status"),
+const rand = (rng) => (typeof rng === "function" ? rng() : Math.random());
+const sample = (arr, rng) => arr[Math.floor(rand(rng) * arr.length)] || arr[0];
+const secToClock = (s) => {
+  const m = Math.floor((s || 0) / 60);
+  const r = Math.max(0, Math.floor((s || 0) - m * 60));
+  const mm = String(m).padStart(1, "0");
+  const ss = String(r).padStart(2, "0");
+  return `${mm}:${ss}`;
 };
 
-const setText = (el, s) => { if (el) el.textContent = s; };
-const appendText = (el, s) => { if (el) el.textContent = (el.textContent ? el.textContent + "\n" : "") + s; };
+const hypeOpeners = [
+  "The gong sounds—here we go!",
+  "We’re live! Gloves up, eyes sharp!",
+  "Bell rings—round underway!",
+  "Crowd roaring, pressure builds!"
+];
 
-/* -------------------------------------------------------
-   Roster loading (multi-strategy)
-------------------------------------------------------- */
-async function loadRoster() {
-  // (1) Global injected (e.g., via data.js)
-  if (globalThis.ROSTER && typeof globalThis.ROSTER === "object") {
-    setText(els.status, "Rosters loaded (global).");
-    return globalThis.ROSTER;
-  }
+const neutralBeats = [
+  "Both sides measuring distance.",
+  "Feints and footwork—testing the guard.",
+  "A steady jab of pressure, no clean lane yet.",
+  "Tempo magnets pulling center, neither blinking."
+];
 
-  // (2) Embedded in HTML
-  const tag = document.getElementById("roster-json");
-  if (tag?.textContent?.trim()) {
-    try {
-      const j = JSON.parse(tag.textContent);
-      setText(els.status, "Rosters loaded (inline).");
-      return j;
-    } catch {}
-  }
+const bluePush = [
+  "Blue steps in with stiff jabs—edge Blue!",
+  "Blue churns the guard—ringcraft on display!",
+  "Blue wins the beat—forcing the lane!",
+  "Blue’s timing slices through—momentum rising!"
+];
 
-  // (3) Bundler-safe URL (copies file when placed in src and built with ?url or import.meta.url)
-  try {
-    const href = new URL("./roster.json", import.meta.url).href;
-    const r = await fetch(href, { cache: "no-cache" });
-    if (r.ok) {
-      setText(els.status, "Rosters loaded (import.meta.url).");
-      return await r.json();
-    }
-  } catch {}
+const redPush = [
+  "Red surges—heavy hands in the pocket!",
+  "Red bullies the line—back ’em up!",
+  "Red hammers the beat—control flipping!",
+  "Red’s cadence bites—momentum accrues!"
+];
 
-  // (4) Plain relative fetch from site root/public
-  for (const u of ["./roster.json", "roster.json", "/roster.json"]) {
-    try {
-      const r = await fetch(u, { cache: "no-cache" });
-      if (r.ok) {
-        setText(els.status, `Rosters loaded (${u}).`);
-        return await r.json();
+const flipLines = {
+  Blue: [
+    "Blue FLIPS the field—crowd explodes!",
+    "Blue steals center—huge momentum swing!",
+    "Blue storms ahead—tables turned!"
+  ],
+  Red: [
+    "Red FLIPS control—what a reversal!",
+    "Red steals the midline—stunning swing!",
+    "Red storms into command—momentum swings!"
+  ]
+};
+
+const bigHit = {
+  Blue: [
+    "Blue detonates—massive shove lands!",
+    "Blue cracks the guard—clean power!",
+    "Blue stacks the combo—ring shakes!"
+  ],
+  Red: [
+    "Red detonates—huge shove connects!",
+    "Red splits the guard—wicked hit!",
+    "Red stacks a mean combo—answer that!"
+  ]
+};
+
+const clutch = {
+  Blue: [
+    "Blue in the clutch—ice in the veins!",
+    "Blue squeezes seconds dry—champion’s poise!",
+    "Blue shuts the door—clinical finish!"
+  ],
+  Red: [
+    "Red in the clutch—steel-nerved!",
+    "Red owns the last beat—stone-cold!",
+    "Red closes ruthless—statement made!"
+  ],
+  Even: [
+    "Both sides gasping—final breaths!",
+    "Every second a blade’s edge!",
+    "Nothing given, nothing left!"
+  ]
+};
+
+const outro = {
+  Blue: [
+    "Horn sounds—round to Blue!",
+    "Time! Blue edges it!",
+    "End of round—Blue on top!"
+  ],
+  Red: [
+    "Horn sounds—round to Red!",
+    "Time! Red takes it!",
+    "End of round—Red ahead!"
+  ],
+  Draw: [
+    "Horn! Too close—call it even!",
+    "Time! Razor-thin—dead even!",
+    "End of round—nothing in it!"
+  ]
+};
+
+export function buildAnnouncer(events, dt, timeline, rng) {
+  const lines = [];
+  const ev = Array.isArray(events) ? events : [];
+  const tl = Array.isArray(timeline) ? timeline : [];
+  const T = Math.max(ev.length, tl.length);
+  const step = Number.isFinite(dt) && dt > 0 ? dt : 5;
+
+  // How often to speak if nothing special happens (≈15s cadence)
+  const speakEvery = Math.max(1, Math.round(15 / step));
+
+  // opener
+  lines.push(sample(hypeOpeners, rng));
+
+  let lastSign = 0; // for flip detection
+  let spokeAt = -999;
+
+  for (let t = 0; t < T; t++) {
+    const z = Number.isFinite(tl[t]) ? tl[t] : 0;
+    const prev = Number.isFinite(tl[t - 1]) ? tl[t - 1] : 0;
+    const dz = z - prev;
+    const sgn = z === 0 ? 0 : (z > 0 ? 1 : -1);
+    const clk = secToClock(t * step);
+
+    // Consume explicit events first
+    const bucket = Array.isArray(ev[t]) ? ev[t] : [];
+
+    // Big swings (synthetic or provided)
+    let firedThisTick = false;
+    for (const e of bucket) {
+      if (e?.type === "zone" && (e.SIDE === "Blue" || e.SIDE === "Red")) {
+        lines.push(`[${clk}] ${sample(bigHit[e.SIDE], rng)} (${e.ZONE})`);
+        firedThisTick = true;
       }
-    } catch {}
-  }
-
-  // (5) Dynamic import from data.js fallback
-  try {
-    const mod = await import("./data.js");
-    const candidate = mod?.default || mod?.ROSTER || globalThis.ROSTER;
-    if (candidate) {
-      setText(els.status, "Rosters loaded (data.js).");
-      return candidate;
     }
-  } catch {}
 
-  setText(els.status, "Failed to load rosters.");
-  throw new Error("Unable to load roster via any strategy.");
-}
-
-/* -------------------------------------------------------
-   Team helpers
-------------------------------------------------------- */
-const cloneP = (p) => ({ ...p });
-const buildTeam = (roster, ids) => ids.map(id => cloneP(roster.players[id]));
-
-function fmtPlayer(p){
-  const n = (x)=>x??0;
-  const ovr = Math.round((n(p.STR)+n(p.PRC)+n(p.INI)+n(p.RHY)+n(p.GST)+n(p.AWR)+n(p.CMP)+n(p.POS))/8);
-  return `${p.name} | ${p.el?.toUpperCase()||"?"} | OVR:${ovr} | INI:${p.INI} STR:${p.STR} PRC:${p.PRC} GST:${p.GST} AWR:${p.AWR} RHY:${p.RHY} CMP:${p.CMP} POS:${p.POS} STM:${p.STM} END:${p.END}`;
-}
-function renderTeam(el, team){
-  if (!el) return;
-  el.textContent = team.map(fmtPlayer).join("\n");
-}
-
-/* -------------------------------------------------------
-   Announcer (works even if sim.js doesn’t emit events)
-------------------------------------------------------- */
-function synthesizeEventsFromTimeline(timeline) {
-  const ev = Array.from({ length: timeline.length }, () => []);
-  for (let t = 1; t < timeline.length; t++) {
-    const dz = timeline[t] - timeline[t-1];
-    if (Math.abs(dz) > 0.6) {
-      ev[t].push({
-        type: "zone",
-        SIDE: dz > 0 ? "Blue" : "Red",
-        ZONE: (timeline[t] >= 0 ? "+" : "") + timeline[t].toFixed(1),
-      });
+    // Detect flips across midline
+    if (!firedThisTick && lastSign !== 0 && sgn !== 0 && sgn !== lastSign) {
+      const side = sgn > 0 ? "Blue" : "Red";
+      lines.push(`[${clk}] ${sample(flipLines[side], rng)} (${z >= 0 ? "+" : ""}${z.toFixed(1)})`);
+      spokeAt = t;
+      firedThisTick = true;
     }
-  }
-  return ev;
-}
-function renderAnnouncer(result, dt, seed) {
-  const rng = mulberry32(String(seed) + ":announcer");
-  const events = result.events ?? synthesizeEventsFromTimeline(result.timeline);
-  const lines = buildAnnouncer(events, dt, result.timeline, rng);
-  if (els.commentary) els.commentary.textContent = lines.join("\n");
-}
 
-/* -------------------------------------------------------
-   Tiny timeline renderer
-------------------------------------------------------- */
-function drawTimeline(timeline) {
-  const c = els.timelineCanvas;
-  if (!c || !c.getContext) return;
-  const ctx = c.getContext("2d");
-  const W = c.width || c.clientWidth || 900;
-  const H = c.height || c.clientHeight || 140;
-  c.width = W; c.height = H;
-  ctx.clearRect(0,0,W,H);
-  // midline
-  ctx.strokeStyle = "#555"; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(0,H/2); ctx.lineTo(W,H/2); ctx.stroke();
-  // path
-  ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.beginPath();
-  for (let i=0;i<timeline.length;i++){
-    const x = (i/(timeline.length-1)) * W;
-    const y = H/2 - (timeline[i]/3) * (H/2 - 8);
-    if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
-  }
-  ctx.stroke();
-}
+    // Momentum pulses (no event this tick)
+    if (!firedThisTick) {
+      // big pulse
+      if (Math.abs(dz) > 0.6) {
+        const side = dz > 0 ? "Blue" : "Red";
+        const bank = side === "Blue" ? bluePush : redPush;
+        lines.push(`[${clk}] ${sample(bank, rng)} (${z >= 0 ? "+" : ""}${z.toFixed(1)})`);
+        spokeAt = t;
+      } else if (t - spokeAt >= speakEvery) {
+        // neutral beat if we've been quiet ~15s
+        lines.push(`[${clk}] ${sample(neutralBeats, rng)}`);
+        spokeAt = t;
+      }
+    }
 
-/* -------------------------------------------------------
-   First mover (leave your deeper logic elsewhere)
-------------------------------------------------------- */
-function firstMoverDecision(_blue,_red,seed){
-  const h = [...String(seed)].reduce((a,c)=>a+c.charCodeAt(0),0);
-  return (h % 2 === 0) ? "blue" : "red";
-}
-
-/* -------------------------------------------------------
-   Round + Match loops (conservative)
-------------------------------------------------------- */
-async function runOneRound({ seed, dt, blueTeam, redTeam, carry }) {
-  const first = firstMoverDecision(blueTeam, redTeam, seed);
-
-  const result = simulateRound({
-    seed,
-    dt,
-    blue: blueTeam,
-    red:  redTeam,
-    firstMover: first
-  });
-
-  renderAnnouncer(result, dt, seed);
-  drawTimeline(result.timeline);
-
-  setText(els.result, `Round Winner: ${result.winner} | Final zone: ${result.zone > 0 ? "+" : ""}${result.zone}`);
-  if (els.summary) {
-    const bz = result.endFactors?.ticksBlueZone ?? 0;
-    const rz = result.endFactors?.ticksRedZone ?? 0;
-    const L = result.timeline?.length || 1;
-    setText(els.summary, `Zone Control — Blue ${Math.round(bz/L*100)}% / Red ${Math.round(rz/L*100)}%`);
+    lastSign = sgn;
   }
 
-  const carryNext = recoverBetweenRounds(blueTeam, redTeam, result.endFactors);
-  return { result, carryNext };
-}
+  // Clutch call + outro based on last zone
+  const zf = Number.isFinite(tl[T - 1]) ? tl[T - 1] : 0;
+  const who = zf > 0 ? "Blue" : zf < 0 ? "Red" : "Draw";
 
-async function runMatch({ roster, rounds, seed, dt }){
-  const teamIds = Object.keys(roster.teams || {});
-  const blueId = teamIds[0];
-  const redId  = teamIds[1] || teamIds[0];
-
-  const blueTeam = buildTeam(roster, roster.teams[blueId]);
-  const redTeam  = buildTeam(roster, roster.teams[redId]);
-
-  renderTeam(els.blueBox, blueTeam);
-  renderTeam(els.redBox,  redTeam);
-
-  if (els.commentary) els.commentary.textContent = "";
-
-  let carry = null, bw = 0, rw = 0;
-  for (let r=1; r<=rounds; r++){
-    const { result, carryNext } = await runOneRound({
-      seed: `${seed}:R${r}`,
-      dt,
-      blueTeam,
-      redTeam,
-      carry
-    });
-    if (result.winner === "Blue") bw++;
-    else if (result.winner === "Red") rw++;
-    appendText(els.commentary, `\n— End of Round ${r}: ${result.winner} —`);
-    carry = carryNext;
-  }
-  appendText(els.commentary, `\nFinal: Blue ${bw} — Red ${rw}`);
-}
-
-/* -------------------------------------------------------
-   Bootstrap
-------------------------------------------------------- */
-(async function init(){
-  setText(els.result, "-");
-  setText(els.summary, "-");
-  setText(els.commentary, "-");
-  if (els.status) setText(els.status, "Loading rosters…");
-
-  let roster;
-  try {
-    roster = await loadRoster();
-  } catch (e) {
-    console.error("Roster load error:", e);
-    setText(els.commentary, "Could not load rosters. Check src/roster.json path.");
-    return; // stop; prevent run buttons from firing a broken sim
+  if (who === "Draw") {
+    lines.push(sample(clutch.Even, rng));
+    lines.push(sample(outro.Draw, rng));
+  } else {
+    lines.push(sample(clutch[who], rng));
+    lines.push(sample(outro[who], rng));
   }
 
-  const seedOf = () => (els.seed?.value?.trim() || "stormfront42");
-  const dtOf   = () => Math.max(1, parseInt(els.dt?.value || "5", 10));
+  return lines;
+}
 
-  const startOne = async () => {
-    if (els.commentary) els.commentary.textContent = "";
-    await runMatch({ roster, rounds: 1, seed: seedOf(), dt: dtOf() });
-  };
-
-  if (els.run1) els.run1.onclick = startOne;
-  if (els.next) els.next.onclick = startOne;
-  if (els.reset) els.reset.onclick = () => {
-    setText(els.commentary, "-");
-    setText(els.result, "-");
-    setText(els.summary, "-");
-    drawTimeline([0,0]);
-  };
-
-  // Optional: auto-run once in dev
-  // startOne();
-})();
+export default { buildAnnouncer };
